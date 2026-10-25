@@ -90,7 +90,7 @@
 .library-notice svg { margin-top: 5px; }
 .exam-question-body { padding: 28px; }
 .exam-question-title { margin: 0 0 22px; font-size: 1.125rem; line-height: 1.7; }
-.exam-question-image { display: block; width: 100%; max-width: 100%; height: auto; }
+.exam-question-image { display: block; width: 45%; max-width: 100%; height: auto; margin-inline: auto; }
 .exam-source { margin: 18px 0 0; color: #79877d; font-size: .875rem; }
 .external-explanation { text-decoration: underline; text-underline-offset: 4px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
 @media (max-width: 640px) {
