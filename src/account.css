@@ -342,6 +342,90 @@
   gap: 9px;
   margin-top: 17px;
 }
+.account-support-guidance {
+  color: #59725e;
+  font-size: 1rem;
+  line-height: 1.9;
+  background: #f4f8f0;
+  border: 1px solid #dce8d5;
+  border-radius: 8px;
+  padding: 10px 17px;
+  margin: 20px 0 12px;
+}
+.admin-user-actions,
+.admin-temporary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.admin-user-actions button {
+  font-size: 0.875rem;
+}
+.account-danger,
+.account-danger-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 11px 17px;
+  border: 1px solid #d9aa9d;
+  border-radius: 7px;
+  font-size: 1rem;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.account-danger {
+  color: #fff;
+  background: #9b4636;
+  border-color: #9b4636;
+}
+.account-danger:hover:not(:disabled) {
+  color: #fff;
+  background: #803727;
+}
+.account-danger-outline {
+  color: #934837;
+  background: #fff9f6;
+}
+.account-danger-outline:hover:not(:disabled) {
+  color: #803727;
+  background: #fff0e9;
+}
+.admin-delete-confirmation {
+  background: #fff7f1;
+  border-color: #ecd0c2;
+}
+.admin-delete-confirmation .account-field {
+  margin-top: 17px;
+}
+.admin-temporary {
+  padding: 20px;
+  border: 1px solid #b9d4b0;
+  background: #f1f8eb;
+  border-radius: 8px;
+  margin-top: 20px;
+  overflow-wrap: anywhere;
+}
+.admin-temporary h3 {
+  margin: 0 0 12px;
+  font-size: 1.125rem;
+  line-height: 1.7;
+}
+.admin-temporary > p {
+  line-height: 1.9;
+}
+.admin-temporary .account-field {
+  margin-top: 20px;
+}
+#temporary-password {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.125rem;
+  letter-spacing: 1px;
+}
+.admin-temporary-actions {
+  margin-top: 12px;
+}
 @media (max-width: 640px) {
   .account-dialog-content {
     padding: 30px 21px 25px;
@@ -363,5 +447,15 @@
   }
   .admin-confirm-actions > button {
     flex: 1 1 auto;
+  }
+  .admin-user-actions,
+  .admin-user-actions button {
+    flex: 1 1 auto;
+  }
+  .admin-user-actions {
+    width: 100%;
+  }
+  .admin-temporary {
+    padding: 15px;
   }
 }

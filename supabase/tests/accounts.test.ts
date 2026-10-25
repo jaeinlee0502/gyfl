@@ -110,7 +110,7 @@ describe('실제 PostgreSQL 마이그레이션과 계정 RLS', () => {
   it('관리자로 로그인해도 클라이언트에서 감사 기록과 서버 전용 RPC에 접근할 수 없다', async () => {
     await asUser(admin);
     await expect(db.query('select * from public.account_admin_audit')).rejects.toThrow(/permission denied/);
-    await expect(db.query('select public.reserve_admin_password_reset($1,$2)', [admin, userA])).rejects.toThrow(/permission denied/);
+    await expect(db.query(`select public.reserve_admin_account_action($1,$2,'password_reset')`, [admin, userA])).rejects.toThrow(/permission denied/);
   });
 
   it('Auth 이메일 변경이 프로필에 반영되고 사용자가 정한 이름은 유지된다', async () => {
@@ -123,26 +123,54 @@ describe('실제 PostgreSQL 마이그레이션과 계정 RLS', () => {
 
   it('서버 예약도 실제 관리자 권한을 다시 검사한다', async () => {
     await asUser('', 'service_role');
-    await expect(db.query('select public.reserve_admin_password_reset($1,$2)', [userA, userB])).rejects.toThrow(/NOT_ADMIN/);
+    await expect(db.query(`select public.reserve_admin_account_action($1,$2,'password_reset')`, [userA, userB])).rejects.toThrow(/NOT_ADMIN/);
     expect((await db.query('select * from public.account_admin_audit')).rows).toHaveLength(0);
   });
 
   it('서버 예약을 감사 기록에 남기고 같은 계정에 60초 내 재요청을 거절한다', async () => {
     await asUser('', 'service_role');
-    const { rows } = await db.query<{ reservation: string }>('select public.reserve_admin_password_reset($1,$2) as reservation', [admin, userA]);
+    const { rows } = await db.query<{ reservation: string }>(`select public.reserve_admin_account_action($1,$2,'password_reset') as reservation`, [admin, userA]);
     expect(rows[0]?.reservation).toMatch(/^[0-9a-f-]{36}$/);
     expect((await db.query('select actor_user_id,target_user_id,action,status from public.account_admin_audit')).rows).toEqual([{ actor_user_id: admin, target_user_id: userA, action: 'password_reset', status: 'pending' }]);
-    await expect(db.query('select public.reserve_admin_password_reset($1,$2)', [admin, userA])).rejects.toThrow(/RESET_COOLDOWN/);
+    await expect(db.query(`select public.reserve_admin_account_action($1,$2,'password_reset')`, [admin, userA])).rejects.toThrow(/RESET_COOLDOWN/);
   });
 
-  it('관리자별 10분에 5건 발송 제한을 적용한다', async () => {
+  it('관리자별 10분에 5건 작업 제한을 적용한다', async () => {
     const { rows: targets } = await db.query<{ id: string }>(`insert into auth.users(id,email)
       select gen_random_uuid(), 'test-' || n::text || '@example.test' from generate_series(1,6) as n returning id`);
     await asUser('', 'service_role');
     for (const target of targets.slice(0,5)) {
-      await db.query('select public.reserve_admin_password_reset($1,$2)', [admin, target.id]);
+      await db.query(`select public.reserve_admin_account_action($1,$2,'password_reset')`, [admin, target.id]);
     }
-    await expect(db.query('select public.reserve_admin_password_reset($1,$2)', [admin, targets[5]!.id])).rejects.toThrow(/RESET_RATE_LIMIT/);
+    await expect(db.query(`select public.reserve_admin_account_action($1,$2,'password_reset')`, [admin, targets[5]!.id])).rejects.toThrow(/RESET_RATE_LIMIT/);
     expect((await db.query('select * from public.account_admin_audit')).rows).toHaveLength(5);
   });
+
+  it('삭제와 비밀번호 초기화에 같은 대상 쿨다운을 적용한다', async () => {
+    await asUser('', 'service_role');
+    await db.query("select public.reserve_admin_account_action($1,$2,'account_delete')", [admin, userA]);
+    expect((await db.query('select action,status from public.account_admin_audit')).rows).toEqual([{ action: 'account_delete', status: 'pending' }]);
+    await expect(db.query("select public.reserve_admin_account_action($1,$2,'password_reset')", [admin, userA])).rejects.toThrow(/RESET_COOLDOWN/);
+  });
+
+  it('서버 RPC도 관리자 자기 계정과 다른 관리자 작업을 막는다', async () => {
+    await db.query('insert into public.account_admins(user_id) values ($1)', [userB]);
+    await asUser('', 'service_role');
+    await expect(db.query("select public.reserve_admin_account_action($1,$2,'password_reset')", [admin, admin])).rejects.toThrow(/PROTECTED_ACCOUNT/);
+    await expect(db.query("select public.reserve_admin_account_action($1,$2,'account_delete')", [admin, userB])).rejects.toThrow(/PROTECTED_ACCOUNT/);
+    await expect(db.query("select public.reserve_admin_account_action($1,$2,'unknown')", [admin, userA])).rejects.toThrow(/INVALID_ACTION/);
+    expect((await db.query('select * from public.account_admin_audit')).rows).toHaveLength(0);
+  });
+
+  it('계정을 삭제하면 프로필과 북마크는 지우고 감사 기록은 남긴다', async () => {
+    await db.query('insert into public.bookmarks(user_id,question_id) values ($1,$2)', [userA, 'demo-history-1']);
+    await asUser('', 'service_role');
+    const reservation = await db.query<{ id: string }>("select public.reserve_admin_account_action($1,$2,'account_delete') as id", [admin, userA]);
+    await db.exec('reset role');
+    await db.query('delete from auth.users where id=$1', [userA]);
+    expect((await db.query('select * from public.bookmarks where user_id=$1', [userA])).rows).toHaveLength(0);
+    expect((await db.query('select * from public.profiles where user_id=$1', [userA])).rows).toHaveLength(0);
+    expect((await db.query('select id,target_user_id from public.account_admin_audit')).rows).toEqual([{id: reservation.rows[0]!.id, target_user_id: userA}]);
+  });
+
 });

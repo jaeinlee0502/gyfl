@@ -24,8 +24,8 @@ create table public.account_admin_audit (
   id uuid primary key default gen_random_uuid(),
   actor_user_id uuid not null,
   target_user_id uuid not null,
-  action text not null check (action = 'password_reset'),
-  status text not null check (status in ('pending', 'sent', 'failed')),
+  action text not null check (action in ('password_reset', 'account_delete')),
+  status text not null check (status in ('pending', 'succeeded', 'failed')),
   created_at timestamptz not null default now()
 );
 create index account_admin_audit_actor_time on public.account_admin_audit (actor_user_id, created_at desc);
@@ -95,13 +95,16 @@ insert into public.profiles (user_id, email, display_name, created_at)
 select id, coalesce(email, ''), left(trim(coalesce(raw_user_meta_data ->> 'display_name', '')), 80), coalesce(created_at, now())
 from auth.users on conflict (user_id) do nothing;
 
-create function public.reserve_admin_password_reset(p_actor_user_id uuid, p_target_user_id uuid)
+create function public.reserve_admin_account_action(p_actor_user_id uuid, p_target_user_id uuid, p_action text)
 returns uuid
 language plpgsql security definer set search_path = ''
 as $$
 declare
   reservation_id uuid;
 begin
+  if p_action is null or p_action not in ('password_reset', 'account_delete') then
+    raise exception 'INVALID_ACTION';
+  end if;
   -- Serialize reservations for this actor and target so parallel requests
   -- cannot bypass the per-actor limit or the per-account cooldown.
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('reset:actor:' || p_actor_user_id::text, 0));
@@ -109,6 +112,9 @@ begin
 
   if not exists (select 1 from public.account_admins where user_id = p_actor_user_id) then
     raise exception 'NOT_ADMIN';
+  end if;
+  if p_actor_user_id = p_target_user_id or exists (select 1 from public.account_admins where user_id = p_target_user_id) then
+    raise exception 'PROTECTED_ACCOUNT';
   end if;
   if not exists (select 1 from public.profiles where user_id = p_target_user_id) then
     raise exception 'ACCOUNT_NOT_FOUND';
@@ -123,13 +129,13 @@ begin
   end if;
 
   insert into public.account_admin_audit (actor_user_id, target_user_id, action, status)
-  values (p_actor_user_id, p_target_user_id, 'password_reset', 'pending')
+  values (p_actor_user_id, p_target_user_id, p_action, 'pending')
   returning id into reservation_id;
   return reservation_id;
 end;
 $$;
-revoke all on function public.reserve_admin_password_reset(uuid, uuid) from public, anon, authenticated;
-grant execute on function public.reserve_admin_password_reset(uuid, uuid) to service_role;
+revoke all on function public.reserve_admin_account_action(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.reserve_admin_account_action(uuid, uuid, text) to service_role;
 
 comment on table public.account_admins is 'Set roles only through a trusted project-owner SQL session. Never derive roles from user metadata.';
 comment on table public.account_admin_audit is 'Server-only account-support audit. No passwords or recovery tokens are stored.';

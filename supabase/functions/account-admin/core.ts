@@ -7,19 +7,38 @@ export interface AccountProfile {
 
 export interface AdminDependencies {
   allowedOrigins: readonly string[];
-  siteUrl: string;
   verifyUser(token: string): Promise<{ id: string } | null>;
   isAdmin(userId: string): Promise<boolean>;
   searchProfiles(query: string, field: 'email' | 'name'): Promise<AccountProfile[]>;
   getProfile(userId: string): Promise<AccountProfile | null>;
-  reserveReset(actorId: string, targetId: string): Promise<string>;
-  sendReset(email: string, redirectTo: string): Promise<void>;
-  recordResetResult(reservationId: string, status: 'sent' | 'failed'): Promise<void>;
+  reserveAction(actorId: string, targetId: string, action: 'password_reset' | 'account_delete'): Promise<string>;
+  updatePassword(userId: string, password: string): Promise<void>;
+  deleteAccount(userId: string): Promise<void>;
+  recordActionResult(reservationId: string, status: 'succeeded' | 'failed'): Promise<void>;
 }
 
 export class AdminError extends Error {
   constructor(public status: number, public code: string, message: string) {
     super(message);
+  }
+}
+
+function generateTemporaryPassword() {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  // Fixed character-class prefix plus 192 random bits; no modulo bias.
+  return 'Aa1!' + Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function recordOutcome(deps: AdminDependencies, reservation: string, status: 'succeeded' | 'failed') {
+  try {
+    await deps.recordActionResult(reservation, status);
+    return true;
+  } catch {
+    // The pre-operation reservation is already durable. A failed final status
+    // update must not hide a successful password change and lose its one-time
+    // password response. No password or provider error is logged here.
+    return false;
   }
 }
 
@@ -80,23 +99,42 @@ export function createAdminHandler(deps: AdminDependencies) {
         return reply(200, { users: await deps.searchProfiles(query, input.field as 'email' | 'name') });
       }
 
-      if (input.action === 'reset-password') {
+      if (input.action === 'reset-password' || input.action === 'delete-account') {
         if (typeof input.userId !== 'string' || !uuid.test(input.userId)) {
           throw new AdminError(400, 'INVALID_ACCOUNT', '계정을 다시 선택해 주세요.');
         }
         const target = await deps.getProfile(input.userId);
         if (!target || !target.email) throw new AdminError(404, 'ACCOUNT_NOT_FOUND', '계정을 찾을 수 없습니다.');
-        // The browser supplies only the account ID. Email and redirect URL
-        // always come from trusted server data/configuration.
-        const reservation = await deps.reserveReset(user.id, target.user_id);
-        try {
-          await deps.sendReset(target.email, deps.siteUrl);
-        } catch {
-          await deps.recordResetResult(reservation, 'failed');
-          throw new AdminError(502, 'RECOVERY_SEND_FAILED', '재설정 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        if (target.user_id === user.id || await deps.isAdmin(target.user_id)) {
+          throw new AdminError(403, 'PROTECTED_ACCOUNT', '관리자 계정은 이 화면에서 초기화하거나 삭제할 수 없습니다.');
         }
-        await deps.recordResetResult(reservation, 'sent');
-        return reply(200, { message: '등록된 이메일로 비밀번호 재설정 안내를 보냈습니다.' });
+        if (input.action === 'delete-account' && (typeof input.confirmEmail !== 'string'
+          || input.confirmEmail.trim().toLowerCase() !== target.email.toLowerCase())) {
+          throw new AdminError(400, 'CONFIRMATION_MISMATCH', '삭제할 계정의 이메일을 정확히 입력해 주세요.');
+        }
+        const action = input.action === 'reset-password' ? 'password_reset' : 'account_delete';
+        const reservation = await deps.reserveAction(user.id, target.user_id, action);
+        if (action === 'password_reset') {
+          // Server-generated, high-entropy and returned only in this response.
+          // Never write the temporary password to logs, profiles or audit data.
+          const temporaryPassword = generateTemporaryPassword();
+          try {
+            await deps.updatePassword(target.user_id, temporaryPassword);
+          } catch {
+            await recordOutcome(deps, reservation, 'failed');
+            throw new AdminError(502, 'PASSWORD_RESET_FAILED', '비밀번호를 초기화하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+          }
+          const auditRecorded = await recordOutcome(deps, reservation, 'succeeded');
+          return reply(200, { message: '임시 비밀번호를 발급했습니다. 선생님께 안전하게 전달해 주세요.', temporaryPassword, ...(!auditRecorded && { auditPending: true }) });
+        }
+        try {
+          await deps.deleteAccount(target.user_id);
+        } catch {
+          await recordOutcome(deps, reservation, 'failed');
+          throw new AdminError(502, 'ACCOUNT_DELETE_FAILED', '계정을 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        }
+        const auditRecorded = await recordOutcome(deps, reservation, 'succeeded');
+        return reply(200, { message: '계정과 저장한 문제를 삭제했습니다.', ...(!auditRecorded && { auditPending: true }) });
       }
       throw new AdminError(400, 'INVALID_ACTION', '지원하지 않는 작업입니다.');
     } catch (error) {

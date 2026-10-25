@@ -3,9 +3,11 @@
   align-items: center;
   gap: 8px;
 }
-.account-actions { margin-left: 18px; font-size: 1rem; }
+.topbar { height: auto; min-height: 73px; flex-wrap: wrap; gap: 8px 16px; padding-top: 12px; padding-bottom: 12px; }
+.topbar-right { min-width: 0; max-width: 100%; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.account-actions { margin-left: 18px; font-size: 1rem; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
 .account-name { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; }
-.header-login, .header-admin, .header-logout {
+.header-login, .header-admin, .header-logout, .header-password {
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -19,6 +21,7 @@
 .header-login { background: #2e7058; color: #fff; }
 .header-login:hover { background: #265f4b; color: #fff; }
 .header-admin { background: #edf4ee; color: #30664a; }
+.header-password { color: #37664b; border: 1px solid #dce6dd; }
 .header-logout { color: #617466; border: 1px solid #dce6dd; }
 .bookmark-account-note, .bookmark-import-confirm {
   display: flex;
@@ -55,5 +58,5 @@
   .topbar-right .icon-button { margin-left: 0; }
   .account-actions { margin-left: 0; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
   .account-name { max-width: 100px; }
-  .header-login, .header-admin, .header-logout { padding: 8px 10px; }
+  .header-login, .header-admin, .header-logout, .header-password { padding: 8px 10px; }
 }

@@ -1,11 +1,11 @@
 import { createClient } from '@supabase/supabase-js'
 
-const url = import.meta.env.VITE_SUPABASE_URL?.trim()
-const publicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
+const url = import.meta.env.VITE_SUPABASE_URL
+const publicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
 // Both values are public project settings. Server/admin keys never belong here.
 export const supabase = url && publicKey
-  ? createClient(url, publicKey, {
+  ? createClient(url.trim(), publicKey.trim(), {
       auth: {
         persistSession: true,
         autoRefreshToken: true,

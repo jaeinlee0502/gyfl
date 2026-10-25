@@ -32,6 +32,8 @@ function explainAuthError(error: { code?: string; status?: number }) {
   switch (error.code) {
     case 'invalid_credentials': return '이메일 또는 비밀번호를 확인해 주세요.'
     case 'email_not_confirmed': return '가입 확인 메일을 먼저 확인해 주세요.'
+    case 'email_address_not_authorized': return '가입·복구 메일 발송 설정을 준비 중이에요. 사이트 관리자에게 문의해 주세요.'
+    case 'email_address_invalid': return '이메일 주소를 다시 확인해 주세요.'
     case 'user_already_exists': return '이미 가입된 이메일이에요. 로그인 또는 비밀번호 찾기를 이용해 주세요.'
     case 'weak_password': return '비밀번호는 10자 이상으로, 더 안전하게 정해 주세요.'
     case 'same_password': return '기존과 다른 비밀번호를 입력해 주세요.'
@@ -87,7 +89,7 @@ export async function initializeAccount() {
       if (version === identityVersion && !authReady.value) acceptIdentity(null)
       recoveryLinkError.value = callbackHasError
       authNotice.value = callbackHasError
-        ? '메일 링크가 만료되었거나 유효하지 않아요. 재설정 메일을 다시 요청해 주세요.'
+        ? '이전 로그인 링크가 만료되었거나 유효하지 않아요. 비밀번호를 잊으셨다면 관리자에게 문의해 주세요.'
         : '로그인 상태를 확인하지 못했어요. 문제 탐색은 계속 이용할 수 있어요.'
       if (callbackHasError) history.replaceState(history.state, '', window.location.pathname + window.location.search)
     }
@@ -112,15 +114,6 @@ async function signUp(email: string, password: string, displayName: string) {
     if (error) throw new Error(explainAuthError(error))
     if (data.session) acceptIdentity(data.session.user)
     return { needsEmailConfirmation: !data.session }
-  })
-}
-
-async function requestPasswordReset(email: string) {
-  return authOperation(async () => {
-    const { error } = await requireClient().auth.resetPasswordForEmail(email.trim(), { redirectTo: accountRedirectUrl() })
-    if (error) throw new Error(explainAuthError(error))
-    recoveryLinkError.value = false
-    authNotice.value = ''
   })
 }
 
@@ -150,10 +143,13 @@ async function adminRequest<T>(body: Record<string, string>): Promise<T> {
       const response = await error.context.json().catch(() => null)
       code = response?.code ?? ''
     }
-    if (code === 'RESET_COOLDOWN' || code === 'RESET_RATE_LIMIT') throw new Error('재설정 요청을 잠시 쉬어 주세요. 같은 계정은 1분 뒤 다시 보낼 수 있어요.')
+    if (code === 'RESET_COOLDOWN' || code === 'RESET_RATE_LIMIT') throw new Error('계정 지원 요청을 잠시 쉬어 주세요. 같은 계정은 1분 뒤 다시 시도할 수 있어요.')
     if (code === 'ADMIN_REQUIRED' || code === 'UNAUTHENTICATED') throw new Error('관리자 권한 또는 로그인 상태를 확인해 주세요.')
     if (code === 'ACCOUNT_NOT_FOUND') throw new Error('계정을 찾지 못했어요. 다시 검색해 주세요.')
-    if (code === 'RECOVERY_SEND_FAILED') throw new Error('재설정 메일을 보내지 못했어요. 잠시 후 다시 시도해 주세요.')
+    if (code === 'PROTECTED_ACCOUNT') throw new Error('관리자 계정은 이 화면에서 초기화하거나 삭제할 수 없어요.')
+    if (code === 'CONFIRMATION_MISMATCH') throw new Error('삭제할 계정의 이메일 아이디를 정확히 입력해 주세요.')
+    if (code === 'PASSWORD_RESET_FAILED') throw new Error('비밀번호를 초기화하지 못했어요. 잠시 후 다시 시도해 주세요.')
+    if (code === 'ACCOUNT_DELETE_FAILED') throw new Error('계정을 삭제하지 못했어요. 잠시 후 다시 시도해 주세요.')
     throw new Error('관리자 서비스에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.')
   }
   return data as T
@@ -164,15 +160,19 @@ async function searchUsers(query: string, field: 'email' | 'name') {
   return data.users
 }
 
-async function sendAdminReset(userId: string) {
-  const data = await adminRequest<{ message: string }>({ action: 'reset-password', userId })
+async function resetUserPassword(userId: string) {
+  return adminRequest<{ message: string; temporaryPassword: string }>({ action: 'reset-password', userId })
+}
+
+async function deleteUserAccount(userId: string, confirmEmail: string) {
+  const data = await adminRequest<{ message: string }>({ action: 'delete-account', userId, confirmEmail })
   return data.message
 }
 
 export function useAccount() {
   return {
     configured: Boolean(supabase), user, authReady, authBusy, isAdmin, recoveryMode, recoveryLinkError, authNotice,
-    signIn, signUp, requestPasswordReset, updatePassword, signOut,
-    clearRecovery: () => { recoveryMode.value = false }, searchUsers, sendAdminReset,
+    signIn, signUp, updatePassword, signOut,
+    clearRecovery: () => { recoveryMode.value = false; recoveryLinkError.value = false; authNotice.value = '' }, searchUsers, resetUserPassword, deleteUserAccount,
   }
 }

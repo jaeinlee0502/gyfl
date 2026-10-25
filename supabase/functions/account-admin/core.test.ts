@@ -17,14 +17,14 @@ function request(body: unknown, extra: { token?: string | null; origin?: string;
 beforeEach(() => {
   dependencies = {
     allowedOrigins: ['https://jaeinlee0502.github.io'],
-    siteUrl: 'https://jaeinlee0502.github.io/gyfl/',
     verifyUser: vi.fn().mockResolvedValue({ id: actorId }),
-    isAdmin: vi.fn().mockResolvedValue(true),
+    isAdmin: vi.fn().mockImplementation(async (id: string) => id === actorId),
     searchProfiles: vi.fn().mockResolvedValue([profile]),
     getProfile: vi.fn().mockResolvedValue(profile),
-    reserveReset: vi.fn().mockResolvedValue('reservation-id'),
-    sendReset: vi.fn().mockResolvedValue(undefined),
-    recordResetResult: vi.fn().mockResolvedValue(undefined),
+    reserveAction: vi.fn().mockResolvedValue('reservation-id'),
+    updatePassword: vi.fn().mockResolvedValue(undefined),
+    deleteAccount: vi.fn().mockResolvedValue(undefined),
+    recordActionResult: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -52,12 +52,12 @@ describe('관리자 계정 지원 서버 권한', () => {
     expect(dependencies.searchProfiles).not.toHaveBeenCalled();
   });
 
-  it('일반 사용자가 계정 ID를 알아도 재설정 메일을 보낼 수 없다', async () => {
+  it('일반 사용자가 계정 ID를 알아도 비밀번호를 초기화할 수 없다', async () => {
     vi.mocked(dependencies.isAdmin).mockResolvedValue(false);
     const response = await createAdminHandler(dependencies)(request({ action: 'reset-password', userId: targetId }));
     expect(response.status).toBe(403);
     expect(dependencies.getProfile).not.toHaveBeenCalled();
-    expect(dependencies.sendReset).not.toHaveBeenCalled();
+    expect(dependencies.updatePassword).not.toHaveBeenCalled();
   });
 
   it('검증된 관리자에게만 검색 결과를 돌려준다', async () => {
@@ -75,35 +75,101 @@ describe('관리자 계정 지원 서버 권한', () => {
     expect(dependencies.searchProfiles).not.toHaveBeenCalled();
   });
 
-  it('클라이언트의 이메일·비밀번호·redirect를 무시하고 저장된 이메일과 서버 redirect만 사용한다', async () => {
+  it('클라이언트가 보낸 비밀번호 대신 서버에서 생성한 임시 비밀번호를 사용한다', async () => {
     const response = await createAdminHandler(dependencies)(request({ action: 'reset-password', userId: targetId, email: 'attacker@example.test', password: 'known-password', redirectTo: 'https://attacker.example.test/' }));
     expect(response.status).toBe(200);
-    expect(dependencies.reserveReset).toHaveBeenCalledWith(actorId, targetId);
-    expect(dependencies.sendReset).toHaveBeenCalledWith(profile.email, dependencies.siteUrl);
-    expect(dependencies.recordResetResult).toHaveBeenCalledWith('reservation-id', 'sent');
-    expect(JSON.stringify(await response.json())).not.toContain('known-password');
+    const data = await response.json();
+    expect(data.temporaryPassword).toMatch(/^Aa1![0-9a-f]{48}$/);
+    expect(dependencies.reserveAction).toHaveBeenCalledWith(actorId, targetId, 'password_reset');
+    expect(dependencies.updatePassword).toHaveBeenCalledWith(targetId, data.temporaryPassword);
+    expect(dependencies.recordActionResult).toHaveBeenCalledWith('reservation-id', 'succeeded');
+    expect(JSON.stringify(data)).not.toContain('known-password');
+    // Passwords are passed only to Auth and the immediate HTTPS response.
+    expect(JSON.stringify(vi.mocked(dependencies.recordActionResult).mock.calls)).not.toContain(data.temporaryPassword);
+    expect(response.headers.get('cache-control')).toBe('no-store');
   });
 
-  it('계정이 없으면 메일을 보내지 않는다', async () => {
+  it('작업은 성공했지만 최종 감사 상태 갱신이 실패해도 임시 비밀번호를 잃지 않는다', async () => {
+    vi.mocked(dependencies.recordActionResult).mockRejectedValue(new Error('audit unavailable'));
+    const response = await createAdminHandler(dependencies)(request({ action: 'reset-password', userId: targetId }));
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.temporaryPassword).toMatch(/^Aa1![0-9a-f]{48}$/);
+    expect(data.auditPending).toBe(true);
+    expect(dependencies.updatePassword).toHaveBeenCalledWith(targetId, data.temporaryPassword);
+  });
+
+  it('임시 비밀번호는 초기화 요청마다 다르게 생성한다', async () => {
+    const handler = createAdminHandler(dependencies);
+    const first = await (await handler(request({ action: 'reset-password', userId: targetId }))).json();
+    const second = await (await handler(request({ action: 'reset-password', userId: targetId }))).json();
+    expect(first.temporaryPassword).not.toEqual(second.temporaryPassword);
+  });
+
+  it('자기 계정과 다른 관리자 계정은 초기화하거나 삭제할 수 없다', async () => {
+    const handler = createAdminHandler(dependencies);
+    vi.mocked(dependencies.getProfile).mockResolvedValue({ ...profile, user_id: actorId });
+    for (const action of ['reset-password', 'delete-account']) {
+      expect((await handler(request({ action, userId: actorId, confirmEmail: profile.email }))).status).toBe(403);
+    }
+    vi.mocked(dependencies.getProfile).mockResolvedValue(profile);
+    vi.mocked(dependencies.isAdmin).mockResolvedValue(true);
+    expect((await handler(request({ action: 'reset-password', userId: targetId }))).status).toBe(403);
+    expect((await handler(request({ action: 'delete-account', userId: targetId, confirmEmail: profile.email }))).status).toBe(403);
+    expect(dependencies.reserveAction).not.toHaveBeenCalled();
+    expect(dependencies.updatePassword).not.toHaveBeenCalled();
+    expect(dependencies.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('계정 삭제는 저장된 대상 이메일과 확인 입력이 일치해야 수행한다', async () => {
+    const handler = createAdminHandler(dependencies);
+    expect((await handler(request({ action: 'delete-account', userId: targetId }))).status).toBe(400);
+    expect((await handler(request({ action: 'delete-account', userId: targetId, confirmEmail: 'other@example.test' }))).status).toBe(400);
+    expect(dependencies.reserveAction).not.toHaveBeenCalled();
+    expect(dependencies.deleteAccount).not.toHaveBeenCalled();
+    const response = await handler(request({ action: 'delete-account', userId: targetId, confirmEmail: ' TEACHER@example.test ' }));
+    expect(response.status).toBe(200);
+    expect(dependencies.reserveAction).toHaveBeenCalledWith(actorId, targetId, 'account_delete');
+    expect(dependencies.deleteAccount).toHaveBeenCalledWith(targetId);
+    expect(dependencies.recordActionResult).toHaveBeenCalledWith('reservation-id', 'succeeded');
+    expect((await response.json()).message).toContain('삭제');
+  });
+
+  it('일반 사용자는 확인 이메일을 알아도 삭제할 수 없다', async () => {
+    vi.mocked(dependencies.isAdmin).mockResolvedValue(false);
+    const response = await createAdminHandler(dependencies)(request({ action: 'delete-account', userId: targetId, confirmEmail: profile.email }));
+    expect(response.status).toBe(403);
+    expect(dependencies.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('삭제 실패를 감사 기록에 남기고 성공으로 응답하지 않는다', async () => {
+    vi.mocked(dependencies.deleteAccount).mockRejectedValue(new Error('private provider error'));
+    const response = await createAdminHandler(dependencies)(request({ action: 'delete-account', userId: targetId, confirmEmail: profile.email }));
+    expect(response.status).toBe(502);
+    expect(dependencies.recordActionResult).toHaveBeenCalledWith('reservation-id', 'failed');
+    expect(JSON.stringify(await response.json())).not.toContain('private provider error');
+  });
+
+  it('계정이 없으면 비밀번호를 바꾸지 않는다', async () => {
     vi.mocked(dependencies.getProfile).mockResolvedValue(null);
     const response = await createAdminHandler(dependencies)(request({ action: 'reset-password', userId: targetId }));
     expect(response.status).toBe(404);
-    expect(dependencies.sendReset).not.toHaveBeenCalled();
+    expect(dependencies.updatePassword).not.toHaveBeenCalled();
   });
 
-  it('재전송 대기 시간에는 메일을 보내지 않는다', async () => {
-    vi.mocked(dependencies.reserveReset).mockRejectedValue(new AdminError(429, 'RESET_COOLDOWN', '잠시 후 다시 시도해 주세요.'));
+  it('대기 시간에는 비밀번호를 바꾸지 않는다', async () => {
+    vi.mocked(dependencies.reserveAction).mockRejectedValue(new AdminError(429, 'RESET_COOLDOWN', '잠시 후 다시 시도해 주세요.'));
     const response = await createAdminHandler(dependencies)(request({ action: 'reset-password', userId: targetId }));
     expect(response.status).toBe(429);
-    expect(dependencies.sendReset).not.toHaveBeenCalled();
+    expect(dependencies.updatePassword).not.toHaveBeenCalled();
     expect((await response.json()).code).toBe('RESET_COOLDOWN');
   });
 
-  it('메일 발송 실패를 감사 기록에 남기고 성공으로 응답하지 않는다', async () => {
-    vi.mocked(dependencies.sendReset).mockRejectedValue(new Error('provider details and internal token'));
+  it('비밀번호 초기화 실패를 감사 기록에 남기고 성공으로 응답하지 않는다', async () => {
+    vi.mocked(dependencies.updatePassword).mockRejectedValue(new Error('provider details and internal token'));
     const response = await createAdminHandler(dependencies)(request({ action: 'reset-password', userId: targetId }));
     expect(response.status).toBe(502);
-    expect(dependencies.recordResetResult).toHaveBeenCalledWith('reservation-id', 'failed');
+    expect(dependencies.recordActionResult).toHaveBeenCalledWith('reservation-id', 'failed');
     expect(JSON.stringify(await response.json())).not.toContain('internal token');
   });
 
@@ -125,7 +191,7 @@ describe('관리자 계정 지원 서버 권한', () => {
     const handler = createAdminHandler(dependencies);
     expect((await handler(request(['bad']))).status).toBe(400);
     expect((await handler(request({ action: 'set-admin', userId: targetId }))).status).toBe(400);
-    expect(dependencies.sendReset).not.toHaveBeenCalled();
+    expect(dependencies.updatePassword).not.toHaveBeenCalled();
   });
 
   it('GET 요청도 서버 인증과 관리자 검증 후 거절한다', async () => {
