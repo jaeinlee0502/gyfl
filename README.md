@@ -9,6 +9,14 @@ npm run dev
 
 검증: `npm test`, `npm run build`. 빌드 결과는 `dist/`에 생성됩니다.
 
+## GitHub Pages 배포
+
+저장소의 **Settings → Pages → Build and deployment → Source**를 **GitHub Actions**로 설정합니다. 이후 `main`에 푸시하면 `.github/workflows/deploy-pages.yml`이 테스트와 빌드를 수행하고 배포합니다. **Actions → Deploy to GitHub Pages → Run workflow**로 수동 배포할 수도 있습니다.
+
+배포 대상 주소: https://jaeinlee0502.github.io/gyfl/ (최초 배포 성공 후 접근 가능)
+
+Vite `base`는 프로젝트 Pages 경로 `/gyfl/`로 설정되어 있습니다. 로컬 개발 서버에서도 터미널에 표시되는 `/gyfl/` 경로로 접속합니다. 배포용 빌드는 `npm run preview`로 검토할 수 있습니다. 별도의 배포 토큰은 필요 없으며 워크플로의 기본 `GITHUB_TOKEN`과 Pages/OIDC 권한을 사용합니다. 저장소에서 Actions와 Pages 사용이 허용되어 있어야 합니다.
+
 ## 현재 구현
 
 - 국어·수학·영어·한국사·통합사회·통합과학 선택
