@@ -48,14 +48,33 @@ async function logout() {
 }
 async function confirmImport() { await importGuestSaved(); importConfirm.value = false }
 const current = computed(() => subjects.find(s => s.name === subject.value)!)
-const filtered = computed(() => questionItems.value.filter(q =>
-  q.subject === subject.value && (!tag.value || q.tags.includes(tag.value)) &&
+const matchingQuestions = computed(() => questionItems.value.filter(q =>
+  q.subject === subject.value &&
   (grade.value === 'all' || q.grade === Number(grade.value)) &&
   (year.value === 'all' || q.year === Number(year.value)) &&
   (month.value === 'all' || q.month === Number(month.value)) &&
   (!savedOnly.value || saved.value.includes(q.id)) &&
   (!query.value.trim() || [q.title, q.prompt, q.passage, ...q.tags].join(' ').toLowerCase().includes(query.value.trim().replace(/^#/, '').toLowerCase()))
-).sort((a,b) => sort.value === 'oldest' ? a.year * 100 + a.month - (b.year * 100 + b.month) : b.year * 100 + b.month - (a.year * 100 + a.month)))
+))
+// Count each tag within the other filters, before applying the selected tag.
+const tagCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const question of matchingQuestions.value) {
+    for (const keyword of new Set(question.tags)) counts.set(keyword, (counts.get(keyword) ?? 0) + 1)
+  }
+  return counts
+})
+const filtered = computed(() => matchingQuestions.value
+  .filter(q => !tag.value || q.tags.includes(tag.value))
+  .sort((a,b) => sort.value === 'oldest' ? a.year * 100 + a.month - (b.year * 100 + b.month) : b.year * 100 + b.month - (a.year * 100 + a.month)))
+function countText(count: number) {
+  return questionsLoading.value ? '…' : questionsError.value ? '–' : count.toLocaleString('ko-KR')
+}
+function countLabel(label: string, count: number) {
+  if (questionsLoading.value) return `${label} 문제 수 불러오는 중`
+  if (questionsError.value) return `${label} 문제 수를 확인하지 못했어요`
+  return `${label} ${count.toLocaleString('ko-KR')}문제`
+}
 const activeFilters = computed(() => tag.value || query.value || grade.value !== 'all' || year.value !== 'all' || month.value !== 'all' || savedOnly.value)
 function reset() { tag.value = ''; query.value = ''; grade.value = 'all'; year.value = 'all'; month.value = 'all'; savedOnly.value = false }
 function selectSubject(name: Subject) { subject.value = name; tag.value = ''; sidebarOpen.value = false }
@@ -94,7 +113,7 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
           <div class="filter-panel">
             <div class="search-row"><label class="search-box"><Search :size="19" /><input v-model="query" placeholder="키워드나 문제 내용으로 검색해 보세요" aria-label="문제 검색"><button v-if="query" class="icon-button" aria-label="검색어 지우기" @click="query = ''"><X :size="15" /></button><span v-else class="search-hint"># 키워드 검색</span></label><button class="filter-reset" :disabled="!activeFilters" @click="reset"><SlidersHorizontal :size="17" /> 필터 초기화</button></div>
             <div class="select-row"><span class="filter-label"><ListFilter :size="15" /> 상세 조건</span><label><span class="sr-only">학년</span><select v-model="grade"><option value="all">전체 학년</option><option value="1">고1</option><option value="2">고2</option></select><ChevronDown :size="13" /></label><label><span class="sr-only">시행 연도</span><select v-model="year"><option value="all">전체 연도</option><option value="2026">2026년</option><option value="2025">2025년</option></select><ChevronDown :size="13" /></label><label><span class="sr-only">시행월</span><select v-model="month"><option value="all">전체 시행월</option><option value="3">3월</option><option value="6">6월</option><option value="9">9월</option><option value="10">10월</option></select><ChevronDown :size="13" /></label><span class="filter-separator"></span><button class="saved-filter" :class="{ enabled: savedOnly }" :aria-pressed="savedOnly" @click="savedOnly = !savedOnly"><Bookmark :size="14" /> 저장한 문제만</button></div>
-            <div class="tags-row"><span class="filter-label">추천 키워드</span><div class="tags"><button :class="{ 'tag-active': !tag }" :aria-pressed="!tag" @click="tag = ''">전체</button><button v-for="t in current.tags" :key="t" :class="{ 'tag-active': tag === t }" :aria-pressed="tag === t" @click="tag = tag === t ? '' : t"><span>#</span> {{ t }}</button></div></div>
+            <div class="tags-row"><span class="filter-label">추천 키워드</span><div class="tags" :aria-busy="questionsLoading"><button :class="{ 'tag-active': !tag }" :aria-pressed="!tag" :aria-label="countLabel('전체', matchingQuestions.length)" @click="tag = ''">전체<span class="tag-count" aria-hidden="true">{{ countText(matchingQuestions.length) }}</span></button><button v-for="t in current.tags" :key="t" :class="{ 'tag-active': tag === t }" :aria-pressed="tag === t" :aria-label="countLabel(t, tagCounts.get(t) ?? 0)" @click="tag = tag === t ? '' : t"><span class="tag-label"><span class="tag-prefix">#</span> {{ t }}</span><span class="tag-count" aria-hidden="true">{{ countText(tagCounts.get(t) ?? 0) }}</span></button></div></div>
           </div>
         </section>
 

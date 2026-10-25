@@ -127,6 +127,91 @@ describe('학교 서재 입장과 문제 탐색', () => {
     wrapper.unmount()
   })
 
+  it('태그별 개수를 표시하고 선택한 태그와 무관하게 학년·연도·시행월 조건을 반영한다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    const tagButton = (label: string) => wrapper.findAll('.tags button').find(button => button.text().includes(label))!
+    const count = (label: string) => tagButton(label).get('.tag-count').text()
+
+    expect(count('전체')).toBe('3')
+    expect(count('현대사')).toBe('2')
+    expect(count('선사·고대')).toBe('1')
+    expect(count('중세')).toBe('0')
+    await tagButton('현대사').trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(2)
+    expect(count('전체')).toBe('3')
+    expect(count('선사·고대')).toBe('1')
+
+    const filters = wrapper.findAll('.select-row select')
+    await filters[0]!.setValue('1')
+    expect(count('전체')).toBe('2')
+    expect(count('현대사')).toBe('1')
+    expect(count('선사·고대')).toBe('1')
+    await filters[1]!.setValue('2026')
+    expect(count('전체')).toBe('0')
+    expect(count('현대사')).toBe('0')
+    await filters[0]!.setValue('all')
+    expect(count('전체')).toBe('1')
+    expect(count('현대사')).toBe('1')
+    expect(count('선사·고대')).toBe('0')
+    await filters[1]!.setValue('all')
+    await filters[2]!.setValue('3')
+    expect(count('전체')).toBe('2')
+    expect(count('현대사')).toBe('1')
+    wrapper.unmount()
+  })
+
+  it('저장 목록·검색어·과목을 바꾸면 태그 개수도 함께 갱신한다', async () => {
+    bookmarks.saved.value = ['exam-20']
+    const wrapper = mount(App)
+    await flushPromises()
+    const count = (label: string) => wrapper.findAll('.tags button')
+      .find(button => button.text().includes(label))!.get('.tag-count').text()
+
+    await wrapper.get('.saved-filter').trigger('click')
+    expect(count('전체')).toBe('1')
+    expect(count('현대사')).toBe('1')
+    expect(count('선사·고대')).toBe('0')
+    bookmarks.saved.value = ['exam-20', 'exam-1']
+    await flushPromises()
+    expect(count('전체')).toBe('2')
+    expect(count('선사·고대')).toBe('1')
+    await wrapper.get('[aria-label="문제 검색"]').setValue('전쟁')
+    expect(count('전체')).toBe('1')
+    expect(count('선사·고대')).toBe('0')
+    await wrapper.get('[aria-label="문제 검색"]').setValue('민주주의')
+    expect(count('전체')).toBe('0')
+    await wrapper.get('.saved-filter').trigger('click')
+    expect(count('전체')).toBe('1')
+    expect(count('현대사')).toBe('1')
+    await wrapper.get('.filter-reset').trigger('click')
+    expect(count('전체')).toBe('3')
+    await wrapper.findAll('.subject-tabs button').find(button => button.text().includes('통합과학'))!.trigger('click')
+    expect(count('전체')).toBe('0')
+    expect(count('물리')).toBe('0')
+    wrapper.unmount()
+  })
+
+  it('문제 수를 불러오거나 확인하지 못한 상태를 0문제로 표시하지 않는다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    library.loading.value = true
+    await flushPromises()
+    expect(wrapper.get('.tags').attributes('aria-busy')).toBe('true')
+    expect(wrapper.findAll('.tag-count').every(badge => badge.text() === '…')).toBe(true)
+    expect(wrapper.get('.tags button').attributes('aria-label')).toBe('전체 문제 수 불러오는 중')
+    library.loading.value = false
+    library.error.value = '문항 정보 연결 실패'
+    await flushPromises()
+    expect(wrapper.findAll('.tag-count').every(badge => badge.text() === '–')).toBe(true)
+    expect(wrapper.get('.tags button').attributes('aria-label')).toBe('전체 문제 수를 확인하지 못했어요')
+    library.error.value = ''
+    await flushPromises()
+    expect(wrapper.get('.tags button .tag-count').text()).toBe('3')
+    expect(wrapper.get('.tags button').attributes('aria-label')).toBe('전체 3문제')
+    wrapper.unmount()
+  })
+
   it('승인 철회나 로그아웃 시 문항·모달·이미지 메모리를 지운다', async () => {
     const wrapper = mount(App)
     await flushPromises()

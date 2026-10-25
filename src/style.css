@@ -734,6 +734,9 @@ h2 {
   min-width: 0;
 }
 .tags button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 0.875rem;
   background: #f6f7f6;
   border: 1px solid #edf0ec;
@@ -741,9 +744,25 @@ h2 {
   border-radius: 5px;
   color: #5e7063;
   min-height: 36px;
+  white-space: nowrap;
 }
-.tags button > span {
+.tags .tag-prefix {
   color: #758776;
+}
+.tags .tag-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #e8eee9;
+  color: #53685b;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
 }
 .tags button.tag-active {
   background: #edf5ee;
@@ -751,8 +770,12 @@ h2 {
   color: #36714d;
   font-weight: 600;
 }
-.tags button.tag-active > span {
+.tags button.tag-active .tag-prefix {
   color: #66976d;
+}
+.tags button.tag-active .tag-count {
+  background: #d5e7d9;
+  color: #2e6545;
 }
 .results {
   margin-top: 30px;
