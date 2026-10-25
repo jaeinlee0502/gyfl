@@ -60,3 +60,46 @@
   .account-name { max-width: 100px; }
   .header-login, .header-admin, .header-logout, .header-password { padding: 8px 10px; }
 }
+
+.school-entrance {
+  min-height: 100dvh;
+  max-width: none;
+  padding: 38px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: radial-gradient(ellipse at 15% 10%, #e6f0e7 0, transparent 48%), #f6f9f6;
+}
+.entrance-brand { align-self: flex-start; margin: 0 0 40px; }
+.entrance-card { width: min(100%, 660px); margin: auto 0; padding: 44px 48px 32px; border: 1px solid #dbe6dc; border-radius: 20px; background: #fff; box-shadow: 0 14px 55px #284d3610; text-align: center; }
+.entrance-emblem { display: inline-flex; width: 66px; height: 66px; align-items: center; justify-content: center; border-radius: 20px; color: #2d7057; background: #edf5ed; }
+.entrance-eyebrow { color: #69816d; font-size: .75rem; letter-spacing: .12em; margin: 25px 0 18px; line-height: 1.7; }
+.entrance-card h1 { margin: 0; font-size: clamp(1.75rem, 3.8vw, 2.6rem); line-height: 1.5; letter-spacing: -.055em; }
+.entrance-card h1 span { color: #3f7557; }
+.entrance-description { font-size: 1.125rem; line-height: 1.9; margin: 22px 0 28px; color: #65756a; word-break: keep-all; }
+.entrance-primary { width: 100%; min-height: 58px; display: flex; justify-content: center; align-items: center; gap: 12px; border-radius: 9px; background: #2f7057; color: #fff; font-weight: 700; font-size: 1.125rem; padding: 14px 18px; }
+.entrance-primary:hover { color: #fff; background: #245c46; }
+.entrance-signup { color: #75847a; font-size: 1rem; line-height: 1.8; margin: 18px 0 0; }
+.entrance-account { font-size: 1.125rem; color: #365d48; overflow-wrap: anywhere; padding: 14px; margin: 0 0 22px; border-radius: 8px; background: #f2f7f2; }
+.entrance-secondary { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.entrance-secondary button { min-height: 44px; padding: 8px 12px; font-size: 1rem; color: #4a6b54; text-decoration: underline; text-underline-offset: 4px; }
+.entrance-features { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px 22px; padding-top: 25px; margin-top: 30px; border-top: 1px solid #e8eee8; color: #748078; font-size: .9375rem; }
+.entrance-features span { display: flex; align-items: center; gap: 7px; }
+.entrance-credit { color: #7a887e; font-size: .875rem; margin: 32px 0 0; }
+.library-notice { display: flex; align-items: flex-start; gap: 9px; padding: 15px 18px; border: 1px solid #dce7dc; border-radius: 8px; color: #536e57; background: #eff6ef; font-size: 1rem; line-height: 1.8; }
+.library-notice svg { margin-top: 5px; }
+.exam-question-body { padding: 28px; }
+.exam-question-title { margin: 0 0 22px; font-size: 1.125rem; line-height: 1.7; }
+.exam-question-image { display: block; width: 100%; max-width: 100%; height: auto; }
+.exam-source { margin: 18px 0 0; color: #79877d; font-size: .875rem; }
+.external-explanation { text-decoration: underline; text-underline-offset: 4px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+@media (max-width: 640px) {
+  .school-entrance { padding: 24px 16px; }
+  .entrance-brand { margin-bottom: 28px; font-size: 1.75rem; }
+  .entrance-card { padding: 30px 22px 25px; }
+  .entrance-eyebrow { font-size: .625rem; letter-spacing: .1em; }
+  .entrance-description { font-size: 1rem; }
+  .entrance-features { flex-direction: column; align-items: center; font-size: .875rem; }
+  .exam-question-body { padding: 20px 12px; }
+  .external-explanation { margin-left: auto; }
+}

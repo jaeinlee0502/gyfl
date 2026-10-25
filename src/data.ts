@@ -11,9 +11,9 @@ export interface Question {
   id: string; subject: Subject; grade: 1 | 2; year: number; month: 3 | 6 | 9 | 10;
   number: number; title: string; tags: string[]; prompt: string;
   passage: string; choices: string[]; answer: number; explanation: string;
-  kind: 'demo'; curriculum: '2022';
-  // Actual exam records should use a separate verified source model with image URL,
-  // original PDF URL, page, attribution, curriculum review and redistribution status.
+  kind: 'demo' | 'exam'; curriculum: '2022' | 'unverified';
+  imageUrl?: string; width?: number; height?: number; points?: number;
+  sourceUrl?: string; explanationUrl?: string; sourcePage?: number;
 }
 export const questions: Question[] = [
   { id: 'demo-history-1', subject: '한국사', grade: 2, year: 2026, month: 9, number: 1, title: '민주주의의 발전과 시민의 참여', tags: ['현대사', '정치사'], prompt: '다음 자료에 나타난 민주화 운동에 대한 설명으로 가장 적절한 것은?', passage: '1987년 6월, 시민들은 대통령 직선제 개헌을 요구하며 거리로 나섰다. 학생뿐 아니라 회사원과 종교인 등 다양한 사람들이 참여하였고, 이후 대통령 직선제 개헌이 이루어졌다.', choices: ['3·1 운동의 계기가 되었다.', '대한민국 임시 정부가 수립되었다.', '대통령 직선제 개헌으로 이어졌다.', '유신 헌법 제정에 영향을 주었다.', '4·19 혁명의 직접적인 원인이 되었다.'], answer: 3, explanation: '6월 민주 항쟁은 1987년에 전개되었으며, 그 결과 대통령 직선제 개헌이 이루어졌습니다.', kind: 'demo', curriculum: '2022' },

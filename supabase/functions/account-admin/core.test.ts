@@ -4,7 +4,7 @@ import { AdminError, createAdminHandler, type AdminDependencies } from './core';
 
 const actorId = '11111111-1111-4111-8111-111111111111';
 const targetId = '22222222-2222-4222-8222-222222222222';
-const profile = { user_id: targetId, email: 'teacher@example.test', display_name: '김선생', created_at: '2026-10-25T00:00:00Z' };
+const profile = { user_id: targetId, email: 'teacher@example.test', display_name: '김선생', created_at: '2026-10-25T00:00:00Z', approved: false, is_admin: false };
 let dependencies: AdminDependencies;
 
 function request(body: unknown, extra: { token?: string | null; origin?: string; method?: string } = {}) {
@@ -20,7 +20,9 @@ beforeEach(() => {
     verifyUser: vi.fn().mockResolvedValue({ id: actorId }),
     isAdmin: vi.fn().mockImplementation(async (id: string) => id === actorId),
     searchProfiles: vi.fn().mockResolvedValue([profile]),
+    listMembers: vi.fn().mockResolvedValue([profile]),
     getProfile: vi.fn().mockResolvedValue(profile),
+    setMembership: vi.fn().mockResolvedValue(undefined),
     reserveAction: vi.fn().mockResolvedValue('reservation-id'),
     updatePassword: vi.fn().mockResolvedValue(undefined),
     deleteAccount: vi.fn().mockResolvedValue(undefined),
@@ -66,6 +68,68 @@ describe('관리자 계정 지원 서버 권한', () => {
     expect(await response.json()).toEqual({ users: [profile] });
     expect(dependencies.searchProfiles).toHaveBeenCalledWith('김선생', 'name');
     expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('관리자는 검색어 없이 승인 대기 계정 목록을 조회한다', async () => {
+    const response = await createAdminHandler(dependencies)(request({ action: 'list-members' }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ users: [profile] });
+    expect(dependencies.listMembers).toHaveBeenCalledOnce();
+    expect(dependencies.searchProfiles).not.toHaveBeenCalled();
+  });
+
+  it('일반 계정은 대기 목록을 읽거나 자기를 승인할 수 없다', async () => {
+    vi.mocked(dependencies.isAdmin).mockResolvedValue(false);
+    const handler = createAdminHandler(dependencies);
+    for (const body of [{ action: 'list-members' }, { action: 'approve-member', userId: actorId, approved: true }]) {
+      expect((await handler(request(body))).status).toBe(403);
+    }
+    expect(dependencies.listMembers).not.toHaveBeenCalled();
+    expect(dependencies.setMembership).not.toHaveBeenCalled();
+  });
+
+  it('승인과 승인 해제는 검증한 관리자와 대상 계정으로만 수행한다', async () => {
+    const handler = createAdminHandler(dependencies);
+    const approved = await handler(request({ action: 'approve-member', userId: targetId, actorId: 'forged' }));
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toMatchObject({ approved: true });
+    expect(dependencies.setMembership).toHaveBeenCalledWith(actorId, targetId, true);
+    const revoked = await handler(request({ action: 'revoke-member', userId: targetId }));
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toMatchObject({ approved: false });
+    expect(dependencies.setMembership).toHaveBeenCalledWith(actorId, targetId, false);
+    expect(dependencies.reserveAction).not.toHaveBeenCalled();
+    expect(dependencies.updatePassword).not.toHaveBeenCalled();
+    expect(dependencies.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('승인 대상은 올바른 UUID와 실제 계정이어야 한다', async () => {
+    const handler = createAdminHandler(dependencies);
+    expect((await handler(request({ action: 'approve-member', userId: 'invalid' }))).status).toBe(400);
+    vi.mocked(dependencies.getProfile).mockResolvedValue(null);
+    expect((await handler(request({ action: 'approve-member', userId: targetId }))).status).toBe(404);
+    expect(dependencies.setMembership).not.toHaveBeenCalled();
+  });
+
+  it('자기 계정과 다른 관리자의 승인 상태는 바꾸지 못한다', async () => {
+    const handler = createAdminHandler(dependencies);
+    vi.mocked(dependencies.getProfile).mockResolvedValue({ ...profile, user_id: actorId, is_admin: true, approved: true });
+    for (const action of ['approve-member', 'revoke-member']) {
+      expect((await handler(request({ action, userId: actorId }))).status).toBe(403);
+    }
+    vi.mocked(dependencies.getProfile).mockResolvedValue({ ...profile, is_admin: true, approved: true });
+    vi.mocked(dependencies.isAdmin).mockResolvedValue(true);
+    expect((await handler(request({ action: 'revoke-member', userId: targetId }))).status).toBe(403);
+    expect(dependencies.setMembership).not.toHaveBeenCalled();
+  });
+
+  it('승인 저장 실패를 성공으로 응답하거나 내부 오류를 노출하지 않는다', async () => {
+    vi.mocked(dependencies.setMembership).mockRejectedValue(new Error('private server detail'));
+    const response = await createAdminHandler(dependencies)(request({ action: 'approve-member', userId: targetId }));
+    expect(response.status).toBe(502);
+    const data = await response.json();
+    expect(data.code).toBe('MEMBERSHIP_UPDATE_FAILED');
+    expect(JSON.stringify(data)).not.toContain('private server detail');
   });
 
   it('짧은 검색어와 잘못된 검색 필드를 거절한다', async () => {

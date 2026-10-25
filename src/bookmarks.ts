@@ -14,7 +14,7 @@ function readGuestSaved(): string[] {
 }
 
 export function useBookmarks() {
-  const { user, authReady } = useAccount()
+  const { user, authReady, accessReady, isSchoolMember, isAdmin } = useAccount()
   const guestSaved = ref<string[]>(readGuestSaved())
   const remoteSaved = ref<string[]>([])
   const loading = ref(false)
@@ -23,9 +23,12 @@ export function useBookmarks() {
   const pending = ref<string[]>([])
   const importing = ref(false)
   let version = 0
-  const saved = computed(() => user.value ? remoteSaved.value : guestSaved.value)
-  const guestToImport = computed(() => guestSaved.value.filter(id => !remoteSaved.value.includes(id)))
-  const disabled = computed(() => !authReady.value || loading.value || loadFailed.value || importing.value)
+  const allowed = computed(() => Boolean(supabase && user.value && authReady.value && accessReady.value && (isSchoolMember.value || isAdmin.value)))
+  const saved = computed(() => allowed.value ? remoteSaved.value : [])
+  // Legacy browser bookmarks can be imported deliberately after school access
+  // has been approved. Guests and pending accounts never expose or edit them.
+  const guestToImport = computed(() => allowed.value ? guestSaved.value.filter(id => !remoteSaved.value.includes(id)) : [])
+  const disabled = computed(() => !allowed.value || loading.value || loadFailed.value || importing.value)
 
   async function load() {
     const currentVersion = ++version
@@ -35,8 +38,8 @@ export function useBookmarks() {
     importing.value = false
     message.value = ''
     loadFailed.value = false
-    loading.value = Boolean(id)
-    if (!id || !supabase) { loading.value = false; return }
+    loading.value = Boolean(id && allowed.value)
+    if (!allowed.value || !id || !supabase) { loading.value = false; return }
     try {
       const { data, error } = await supabase.from('bookmarks').select('question_id').eq('user_id', id)
       if (currentVersion !== version) return
@@ -50,19 +53,12 @@ export function useBookmarks() {
       if (currentVersion === version) loading.value = false
     }
   }
-  watch(() => user.value?.id, () => { void load() }, { immediate: true, flush: 'sync' })
+  watch(() => [user.value?.id, allowed.value] as const, () => { void load() }, { immediate: true, flush: 'sync' })
 
   async function toggleSaved(questionId: string) {
     if (disabled.value || pending.value.includes(questionId)) return
     message.value = ''
-    if (!user.value) {
-      guestSaved.value = guestSaved.value.includes(questionId)
-        ? guestSaved.value.filter(id => id !== questionId) : [...guestSaved.value, questionId]
-      try { localStorage.setItem(storageKey, JSON.stringify(guestSaved.value)) }
-      catch { message.value = '브라우저 저장 공간을 사용할 수 없어 이번 화면에서만 보관됩니다.' }
-      return
-    }
-    if (!supabase) return
+    if (!allowed.value || !user.value || !supabase) return
     const id = user.value.id
     const currentVersion = version
     const wasSaved = remoteSaved.value.includes(questionId)
@@ -82,7 +78,7 @@ export function useBookmarks() {
   }
 
   async function importGuestSaved() {
-    if (!user.value || !supabase || disabled.value || pending.value.length || !guestToImport.value.length) return
+    if (!allowed.value || !user.value || !supabase || disabled.value || pending.value.length || !guestToImport.value.length) return
     const id = user.value.id
     const currentVersion = version
     const ids = [...guestToImport.value]

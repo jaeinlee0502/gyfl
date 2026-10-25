@@ -8,7 +8,10 @@ const db = vi.hoisted(() => ({ from: vi.fn(), read: vi.fn(), upsert: vi.fn(), re
 vi.mock('./lib/supabase', () => ({ supabase: { from: db.from } }))
 vi.mock('./account', async () => {
   const { ref } = await import('vue')
-  const state = { user: ref<User | null>(null), authReady: ref(true) }
+  const state = {
+    user: ref<User | null>(null), authReady: ref(true), accessReady: ref(true),
+    isSchoolMember: ref(true), isAdmin: ref(false),
+  }
   return { useAccount: () => state }
 })
 
@@ -35,6 +38,9 @@ beforeEach(() => {
   localStorage.clear()
   identity.user.value = null
   identity.authReady.value = true
+  identity.accessReady.value = true
+  identity.isSchoolMember.value = true
+  identity.isAdmin.value = false
   vi.clearAllMocks()
   db.read.mockResolvedValue({ data: [], error: null })
   db.upsert.mockResolvedValue({ error: null })
@@ -51,10 +57,13 @@ afterEach(() => {
 })
 
 describe('계정별 북마크', () => {
-  it('로그인 시 게스트 저장과 계정 저장을 분리하고 로그아웃 시 게스트 저장으로 돌아간다', async () => {
+  it('학교 이용이 승인된 계정끼리 저장 목록을 분리하고 로그아웃하면 숨긴다', async () => {
     localStorage.setItem('gyfl-bookmarks-v1', JSON.stringify([first]))
     const store = createStore()
-    expect(store.saved.value).toEqual([first])
+    expect(store.saved.value).toEqual([])
+    expect(store.guestToImport.value).toEqual([])
+    expect(store.disabled.value).toBe(true)
+    expect(db.read).not.toHaveBeenCalled()
     db.read.mockImplementation((id: string) => Promise.resolve({ data: [{ question_id: id === 'teacher-a' ? second : first }], error: null }))
     identity.user.value = account('teacher-a')
     expect(store.saved.value).toEqual([])
@@ -66,7 +75,90 @@ describe('계정별 북마크', () => {
     await flushPromises()
     expect(store.saved.value).toEqual([first])
     identity.user.value = null
+    expect(store.saved.value).toEqual([])
+    expect(store.guestToImport.value).toEqual([])
+    expect(store.disabled.value).toBe(true)
+  })
+
+  it('비로그인과 승인 대기 계정은 조회·저장·가져오기를 하지 않고 승인 후 불러온다', async () => {
+    localStorage.setItem('gyfl-bookmarks-v1', JSON.stringify([first]))
+    identity.isSchoolMember.value = false
+    const store = createStore()
+    await store.toggleSaved(first)
+    await store.importGuestSaved()
+    expect(db.from).not.toHaveBeenCalled()
+    identity.user.value = account('pending-teacher')
+    await flushPromises()
+    await store.reloadSaved()
+    await store.toggleSaved(second)
+    await store.importGuestSaved()
+    expect(store.saved.value).toEqual([])
+    expect(store.guestToImport.value).toEqual([])
+    expect(store.disabled.value).toBe(true)
+    expect(db.from).not.toHaveBeenCalled()
+    expect(localStorage.getItem('gyfl-bookmarks-v1')).toBe(JSON.stringify([first]))
+
+    db.read.mockResolvedValue({ data: [{ question_id: second }], error: null })
+    identity.isSchoolMember.value = true
+    await flushPromises()
+    expect(db.read).toHaveBeenCalledExactlyOnceWith('pending-teacher')
+    expect(store.saved.value).toEqual([second])
+    expect(store.guestToImport.value).toEqual([first])
+    expect(store.disabled.value).toBe(false)
+  })
+
+  it('관리자는 학교 회원 행이 없어도 권한 확인이 완료되면 계정 저장을 이용한다', async () => {
+    identity.isSchoolMember.value = false
+    identity.user.value = account('school-admin')
+    identity.isAdmin.value = true
+    identity.accessReady.value = false
+    const store = createStore()
+    expect(db.read).not.toHaveBeenCalled()
+    expect(store.disabled.value).toBe(true)
+    identity.accessReady.value = true
+    await flushPromises()
+    expect(db.read).toHaveBeenCalledExactlyOnceWith('school-admin')
+    await store.toggleSaved(first)
     expect(store.saved.value).toEqual([first])
+  })
+
+  it('승인이 철회되면 즉시 목록과 대기 상태를 지우고 늦은 조회 응답을 무시한다', async () => {
+    identity.user.value = account('teacher-a')
+    db.read.mockResolvedValueOnce({ data: [{ question_id: first }], error: null })
+    const store = createStore()
+    await flushPromises()
+    expect(store.saved.value).toEqual([first])
+    const pendingRead = deferred<{ data: { question_id: string }[]; error: null }>()
+    db.read.mockReturnValueOnce(pendingRead.promise)
+    const reload = store.reloadSaved()
+    identity.isSchoolMember.value = false
+    expect(store.saved.value).toEqual([])
+    expect(store.loading.value).toBe(false)
+    expect(store.pending.value).toEqual([])
+    expect(store.disabled.value).toBe(true)
+    pendingRead.resolve({ data: [{ question_id: second }], error: null })
+    await reload
+    await store.toggleSaved(second)
+    await store.importGuestSaved()
+    expect(store.saved.value).toEqual([])
+    expect(db.upsert).not.toHaveBeenCalled()
+  })
+
+  it('저장 중 권한 확인이 다시 시작되면 늦은 저장 응답이 목록을 되살리지 않는다', async () => {
+    identity.user.value = account('teacher-a')
+    const store = createStore()
+    await flushPromises()
+    const pendingWrite = deferred<{ error: null }>()
+    db.upsert.mockReturnValueOnce(pendingWrite.promise)
+    const saving = store.toggleSaved(first)
+    expect(store.pending.value).toEqual([first])
+    identity.accessReady.value = false
+    expect(store.pending.value).toEqual([])
+    expect(store.disabled.value).toBe(true)
+    pendingWrite.resolve({ error: null })
+    await saving
+    expect(store.saved.value).toEqual([])
+    expect(store.pending.value).toEqual([])
   })
 
   it('다른 계정으로 전환한 뒤 도착한 이전 계정의 조회 결과를 무시한다', async () => {

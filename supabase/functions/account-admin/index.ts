@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
-import { AdminError, createAdminHandler } from './core.ts';
+import { AdminError, createAdminHandler, type AccountProfile } from './core.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL');
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -22,6 +22,24 @@ const allowedOrigins = [siteUrl.origin, ...configuredOrigins.map(value => {
 if (!supabaseUrl || !serviceRoleKey) throw new Error('Supabase server environment is not configured.');
 const server = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
+async function withMembership(profiles: Omit<AccountProfile, 'approved' | 'is_admin'>[]): Promise<AccountProfile[]> {
+  if (profiles.length === 0) return [];
+  const ids = profiles.map(profile => profile.user_id);
+  const [members, admins] = await Promise.all([
+    server.from('school_members').select('user_id').in('user_id', ids),
+    server.from('account_admins').select('user_id').in('user_id', ids),
+  ]);
+  if (members.error) throw members.error;
+  if (admins.error) throw admins.error;
+  const memberIds = new Set(members.data.map(row => row.user_id));
+  const adminIds = new Set(admins.data.map(row => row.user_id));
+  return profiles.map(profile => ({
+    ...profile,
+    approved: memberIds.has(profile.user_id) || adminIds.has(profile.user_id),
+    is_admin: adminIds.has(profile.user_id),
+  }));
+}
+
 const handler = createAdminHandler({
   allowedOrigins,
   async verifyUser(token) {
@@ -40,12 +58,28 @@ const handler = createAdminHandler({
       .ilike(field === 'email' ? 'email' : 'display_name', `%${escaped}%`)
       .order('created_at', { ascending: false }).limit(20);
     if (error) throw error;
+    return withMembership(data);
+  },
+  async listMembers() {
+    const { data, error } = await server.rpc('list_school_accounts');
+    if (error) throw error;
     return data;
   },
   async getProfile(userId) {
     const { data, error } = await server.from('profiles').select('user_id,email,display_name,created_at').eq('user_id', userId).maybeSingle();
     if (error) throw error;
-    return data;
+    return data ? (await withMembership([data]))[0] ?? null : null;
+  },
+  async setMembership(actorId, targetId, approved) {
+    const { error } = await server.rpc('set_school_membership', {
+      p_actor_user_id: actorId, p_target_user_id: targetId, p_approved: approved,
+    });
+    if (error) {
+      if (error.message.includes('NOT_ADMIN')) throw new AdminError(403, 'ADMIN_REQUIRED', '관리자만 사용할 수 있습니다.');
+      if (error.message.includes('PROTECTED_ACCOUNT')) throw new AdminError(403, 'PROTECTED_ACCOUNT', '관리자 계정의 이용 권한은 이 화면에서 변경할 수 없습니다.');
+      if (error.message.includes('ACCOUNT_NOT_FOUND')) throw new AdminError(404, 'ACCOUNT_NOT_FOUND', '계정을 찾을 수 없습니다.');
+      throw error;
+    }
   },
   async reserveAction(actorId, targetId, action) {
     const { data, error } = await server.rpc('reserve_admin_account_action', { p_actor_user_id: actorId, p_target_user_id: targetId, p_action: action });

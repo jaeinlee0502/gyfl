@@ -258,6 +258,52 @@
 .admin-search-button {
   flex: 0 0 auto;
 }
+.admin-members-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 22px;
+}
+.admin-members-heading h3 {
+  margin: 0 0 6px;
+  font-size: 1.125rem;
+}
+.admin-members-heading p {
+  margin: 0;
+  color: #677a6a;
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+.admin-user-details > strong {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.admin-user-details .admin-membership-badge {
+  padding: 4px 9px;
+  border-radius: 5px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.admin-membership-badge.is-pending {
+  color: #855721;
+  background: #fff4df;
+}
+.admin-membership-badge.is-approved {
+  color: #2d6844;
+  background: #edf5e8;
+}
+.admin-membership-badge.is-admin {
+  color: #49658b;
+  background: #eef2fa;
+}
+.admin-user-actions .admin-revoke-button {
+  padding: 8px 12px;
+}
 .admin-result-count {
   font-size: 0.875rem;
   color: #677a6a;

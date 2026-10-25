@@ -7,12 +7,17 @@ export interface AccountSummary {
   email: string
   display_name: string
   created_at: string
+  approved: boolean
+  is_admin: boolean
 }
 
 const user = ref<User | null>(null)
 const authReady = ref(!supabase)
 const authBusy = ref(false)
 const isAdmin = ref(false)
+const isSchoolMember = ref(false)
+const accessReady = ref(!supabase)
+const schoolAccessError = ref('')
 const recoveryMode = ref(false)
 const recoveryLinkError = ref(false)
 const authNotice = ref('')
@@ -21,9 +26,10 @@ const recoveryCallback = callbackParams.get('type') === 'recovery'
 const callbackHasError = callbackParams.has('error') || callbackParams.has('error_code')
 let initialized = false
 let identityVersion = 0
+let accessVersion = 0
 
 function requireClient() {
-  if (!supabase) throw new Error('계정 기능을 준비 중이에요. 문제 탐색은 계속 이용할 수 있어요.')
+  if (!supabase) throw new Error('학교 서재 연결을 준비 중이에요. 관리자에게 문의해 주세요.')
   return supabase
 }
 
@@ -50,17 +56,53 @@ async function authOperation<T>(operation: () => Promise<T>): Promise<T> {
 
 function acceptIdentity(next: User | null) {
   const version = ++identityVersion
-  user.value = next
+  ++accessVersion
   isAdmin.value = false
+  isSchoolMember.value = false
+  accessReady.value = !next || !supabase
+  schoolAccessError.value = ''
+  user.value = next
   authReady.value = true
   if (!next || !supabase) return
   // Never await another Supabase operation inside onAuthStateChange's lock.
   window.setTimeout(() => {
-    void supabase!.from('account_admins').select('user_id').eq('user_id', next.id).maybeSingle()
-      .then(({ data, error }) => {
-        if (version === identityVersion && !error) isAdmin.value = Boolean(data)
-      })
+    if (version === identityVersion) void refreshSchoolAccess()
   }, 0)
+}
+
+async function refreshSchoolAccess() {
+  const id = user.value?.id
+  const identity = identityVersion
+  const access = ++accessVersion
+  // Keep an already verified session visible during a routine recheck. Identity
+  // changes clear access synchronously in acceptIdentity before changing user.
+  if (!accessReady.value || !isSchoolMember.value) {
+    accessReady.value = false
+    isSchoolMember.value = false
+    isAdmin.value = false
+  }
+  schoolAccessError.value = ''
+  if (!id || !supabase) {
+    accessReady.value = true
+    return
+  }
+  try {
+    const [administrator, membership] = await Promise.all([
+      supabase.from('account_admins').select('user_id').eq('user_id', id).maybeSingle(),
+      supabase.from('school_members').select('user_id').eq('user_id', id).maybeSingle(),
+    ])
+    if (administrator.error || membership.error) throw new Error('membership lookup failed')
+    if (identity !== identityVersion || access !== accessVersion || user.value?.id !== id) return
+    isAdmin.value = Boolean(administrator.data)
+    isSchoolMember.value = Boolean(administrator.data || membership.data)
+  } catch {
+    if (identity !== identityVersion || access !== accessVersion || user.value?.id !== id) return
+    isAdmin.value = false
+    isSchoolMember.value = false
+    schoolAccessError.value = '학교 서재 이용 권한을 확인하지 못했어요. 다시 확인해 주세요.'
+  } finally {
+    if (identity === identityVersion && access === accessVersion && user.value?.id === id) accessReady.value = true
+  }
 }
 
 export async function initializeAccount() {
@@ -72,7 +114,10 @@ export async function initializeAccount() {
     if (event === 'SIGNED_OUT') recoveryMode.value = false
     // A token refresh shouldn't discard the current user's visible saved list.
     if (user.value?.id !== session?.user.id || !authReady.value) acceptIdentity(session?.user ?? null)
-    else if (session) user.value = session.user
+    else if (session) {
+      user.value = session.user
+      if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') window.setTimeout(() => { void refreshSchoolAccess() }, 0)
+    }
   })
   const version = identityVersion
   try {
@@ -90,7 +135,7 @@ export async function initializeAccount() {
       recoveryLinkError.value = callbackHasError
       authNotice.value = callbackHasError
         ? '이전 로그인 링크가 만료되었거나 유효하지 않아요. 비밀번호를 잊으셨다면 관리자에게 문의해 주세요.'
-        : '로그인 상태를 확인하지 못했어요. 문제 탐색은 계속 이용할 수 있어요.'
+        : '로그인 상태를 확인하지 못했어요. 다시 로그인해 주세요.'
       if (callbackHasError) history.replaceState(history.state, '', window.location.pathname + window.location.search)
     }
   }
@@ -146,7 +191,8 @@ async function adminRequest<T>(body: Record<string, string>): Promise<T> {
     if (code === 'RESET_COOLDOWN' || code === 'RESET_RATE_LIMIT') throw new Error('계정 지원 요청을 잠시 쉬어 주세요. 같은 계정은 1분 뒤 다시 시도할 수 있어요.')
     if (code === 'ADMIN_REQUIRED' || code === 'UNAUTHENTICATED') throw new Error('관리자 권한 또는 로그인 상태를 확인해 주세요.')
     if (code === 'ACCOUNT_NOT_FOUND') throw new Error('계정을 찾지 못했어요. 다시 검색해 주세요.')
-    if (code === 'PROTECTED_ACCOUNT') throw new Error('관리자 계정은 이 화면에서 초기화하거나 삭제할 수 없어요.')
+    if (code === 'PROTECTED_ACCOUNT') throw new Error('관리자 계정의 이용 권한이나 계정은 이 화면에서 변경할 수 없어요.')
+    if (code === 'MEMBERSHIP_UPDATE_FAILED') throw new Error('서재 이용 권한을 변경하지 못했어요. 잠시 후 다시 시도해 주세요.')
     if (code === 'CONFIRMATION_MISMATCH') throw new Error('삭제할 계정의 이메일 아이디를 정확히 입력해 주세요.')
     if (code === 'PASSWORD_RESET_FAILED') throw new Error('비밀번호를 초기화하지 못했어요. 잠시 후 다시 시도해 주세요.')
     if (code === 'ACCOUNT_DELETE_FAILED') throw new Error('계정을 삭제하지 못했어요. 잠시 후 다시 시도해 주세요.')
@@ -160,6 +206,21 @@ async function searchUsers(query: string, field: 'email' | 'name') {
   return data.users
 }
 
+async function listMembers() {
+  const data = await adminRequest<{ users: AccountSummary[] }>({ action: 'list-members' })
+  return data.users
+}
+
+async function approveMember(userId: string) {
+  const data = await adminRequest<{ message: string; approved: boolean }>({ action: 'approve-member', userId })
+  return data.message
+}
+
+async function revokeMember(userId: string) {
+  const data = await adminRequest<{ message: string; approved: boolean }>({ action: 'revoke-member', userId })
+  return data.message
+}
+
 async function resetUserPassword(userId: string) {
   return adminRequest<{ message: string; temporaryPassword: string }>({ action: 'reset-password', userId })
 }
@@ -171,8 +232,9 @@ async function deleteUserAccount(userId: string, confirmEmail: string) {
 
 export function useAccount() {
   return {
-    configured: Boolean(supabase), user, authReady, authBusy, isAdmin, recoveryMode, recoveryLinkError, authNotice,
+    configured: Boolean(supabase), user, authReady, authBusy, isAdmin, isSchoolMember, accessReady, schoolAccessError, recoveryMode, recoveryLinkError, authNotice,
     signIn, signUp, updatePassword, signOut,
+    refreshSchoolAccess, listMembers, approveMember, revokeMember,
     clearRecovery: () => { recoveryMode.value = false; recoveryLinkError.value = false; authNotice.value = '' }, searchUsers, resetUserPassword, deleteUserAccount,
   }
 }

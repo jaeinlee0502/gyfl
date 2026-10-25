@@ -23,8 +23,8 @@ const notice = ref('')
 const unavailable = computed(() => !configured || !authReady.value || authBusy.value || pending.value || (view.value === 'password' && !user.value))
 const title = computed(() => ({ signin: '나의 문제서재에 로그인', signup: '선생님의 서재 만들기', forgot: '아이디 · 비밀번호 찾기', password: '새 비밀번호 설정', complete: '비밀번호를 변경했어요' })[view.value])
 const subtitle = computed(() => ({
-  signin: '문제 탐색은 누구나 자유롭게. 로그인하면 저장한 문제를 다른 기기에서도 볼 수 있어요.',
-  signup: '이메일을 로그인 아이디로 사용해요. 수업에 필요한 문제를 나만의 서재에 모아보세요.',
+  signin: '고양외고 교직원 전용 서재입니다. 로그인 후 승인된 계정으로 입장할 수 있어요.',
+  signup: '이메일을 로그인 아이디로 사용해요. 회원가입 후 관리자 승인을 받으면 서재에 입장할 수 있어요.',
   forgot: '관리자에게 이름과 아이디를 알려주고 계정 확인이나 비밀번호 초기화를 요청해 주세요.',
   password: '다른 곳에서 사용하지 않은 새 비밀번호를 정해 주세요.',
   complete: '이제 새 비밀번호로 로그인할 수 있어요.',
@@ -96,7 +96,7 @@ onBeforeUnmount(() => { if (dialog.value?.open) dialog.value.close() })
       <h2 id="account-title">{{ title }}</h2>
       <p id="account-description" class="account-description">{{ subtitle }}</p>
 
-      <div v-if="!configured" class="account-notice" role="status">계정 기능을 준비 중이에요. 문제 탐색은 계속 이용할 수 있어요.</div>
+      <div v-if="!configured" class="account-notice" role="status">계정 기능을 준비 중이에요. 학교 서재 연결은 관리자에게 문의해 주세요.</div>
       <div v-if="authNotice" class="account-error" role="alert">{{ authNotice }}</div>
       <div v-if="notice" class="account-notice" role="status">{{ notice }}</div>
       <div v-if="error" id="account-error" class="account-error" role="alert">{{ error }}</div>
@@ -118,12 +118,12 @@ onBeforeUnmount(() => { if (dialog.value?.open) dialog.value.close() })
           <button :class="{ active: view === 'signup' }" :aria-pressed="view === 'signup'" :disabled="pending" @click="changeView('signup')">회원가입</button>
         </div>
         <form class="account-form" :aria-busy="pending" :aria-describedby="error ? 'account-error' : undefined" @submit.prevent="submit">
-          <label v-if="view === 'signup'" class="account-field" for="account-name"><span>이름 또는 별명</span><input id="account-name" v-model="displayName" name="displayName" autocomplete="nickname" minlength="2" maxlength="50" required placeholder="예: 김역사 선생님" :disabled="pending"></label>
+          <label v-if="view === 'signup'" class="account-field" for="account-name"><span>이름</span><input id="account-name" v-model="displayName" name="displayName" autocomplete="name" minlength="2" maxlength="50" required placeholder="교직원 확인을 위한 이름을 입력해 주세요" :disabled="pending"></label>
           <label v-if="view !== 'password'" class="account-field" for="account-email"><span>이메일 아이디</span><input id="account-email" v-model="email" name="email" type="email" :autocomplete="view === 'signin' ? 'username' : 'email'" inputmode="email" maxlength="254" required placeholder="teacher@example.com" :disabled="pending" autocapitalize="none" spellcheck="false"></label>
           <p v-else-if="user?.email" class="account-recovery-email"><UserRound :size="17" />{{ user.email }}</p>
           <label class="account-field" for="account-password"><span>{{ view === 'password' ? '새 비밀번호' : '비밀번호' }}</span><span class="account-password-input"><input id="account-password" v-model="password" name="password" :type="showPassword ? 'text' : 'password'" :autocomplete="view === 'signin' ? 'current-password' : 'new-password'" :minlength="view === 'signin' ? undefined : 10" maxlength="128" required :placeholder="view === 'signin' ? '비밀번호를 입력해 주세요' : '10자 이상 입력해 주세요'" :disabled="pending"><button type="button" class="account-password-toggle" :aria-label="showPassword ? '비밀번호 숨기기' : '비밀번호 표시'" :aria-pressed="showPassword" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" :size="19" /><Eye v-else :size="19" /></button></span></label>
           <label v-if="view === 'signup' || view === 'password'" class="account-field" for="account-confirmation"><span>비밀번호 확인</span><input id="account-confirmation" v-model="confirmation" name="passwordConfirmation" :type="showPassword ? 'text' : 'password'" autocomplete="new-password" minlength="10" maxlength="128" required placeholder="같은 비밀번호를 한 번 더 입력해 주세요" :disabled="pending"></label>
-          <button class="account-primary" type="submit" :disabled="unavailable">{{ pending || authBusy ? '처리 중이에요…' : !authReady && configured ? '계정 확인 중…' : view === 'signin' ? '로그인' : view === 'signup' ? '서재 만들기'  : '비밀번호 변경하기' }}</button>
+          <button class="account-primary" type="submit" :disabled="unavailable">{{ pending || authBusy ? '처리 중이에요…' : !authReady && configured ? '계정 확인 중…' : view === 'signin' ? '로그인' : view === 'signup' ? '가입하고 승인 요청하기'  : '비밀번호 변경하기' }}</button>
         </form>
         <div class="account-form-footer">
           <button v-if="view === 'signin'" class="account-text-button" :disabled="pending" @click="changeView('forgot')">이메일 아이디 · 비밀번호를 잊으셨나요?</button>

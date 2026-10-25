@@ -3,6 +3,8 @@ export interface AccountProfile {
   email: string;
   display_name: string;
   created_at: string;
+  approved: boolean;
+  is_admin: boolean;
 }
 
 export interface AdminDependencies {
@@ -10,7 +12,9 @@ export interface AdminDependencies {
   verifyUser(token: string): Promise<{ id: string } | null>;
   isAdmin(userId: string): Promise<boolean>;
   searchProfiles(query: string, field: 'email' | 'name'): Promise<AccountProfile[]>;
+  listMembers(): Promise<AccountProfile[]>;
   getProfile(userId: string): Promise<AccountProfile | null>;
+  setMembership(actorId: string, targetId: string, approved: boolean): Promise<void>;
   reserveAction(actorId: string, targetId: string, action: 'password_reset' | 'account_delete'): Promise<string>;
   updatePassword(userId: string, password: string): Promise<void>;
   deleteAccount(userId: string): Promise<void>;
@@ -90,6 +94,10 @@ export function createAdminHandler(deps: AdminDependencies) {
         throw new AdminError(400, 'INVALID_BODY', '잘못된 요청 내용입니다.');
       }
 
+      if (input.action === 'list-members') {
+        return reply(200, { users: await deps.listMembers() });
+      }
+
       if (input.action === 'search') {
         if (typeof input.query !== 'string' || !['email', 'name'].includes(String(input.field))) {
           throw new AdminError(400, 'INVALID_SEARCH', '이메일 또는 이름으로 검색해 주세요.');
@@ -97,6 +105,28 @@ export function createAdminHandler(deps: AdminDependencies) {
         const query = input.query.trim();
         if (query.length < 2 || query.length > 120) throw new AdminError(400, 'INVALID_SEARCH', '검색어를 2자 이상 120자 이하로 입력해 주세요.');
         return reply(200, { users: await deps.searchProfiles(query, input.field as 'email' | 'name') });
+      }
+
+      if (input.action === 'approve-member' || input.action === 'revoke-member') {
+        if (typeof input.userId !== 'string' || !uuid.test(input.userId)) {
+          throw new AdminError(400, 'INVALID_ACCOUNT', '계정을 다시 선택해 주세요.');
+        }
+        const target = await deps.getProfile(input.userId);
+        if (!target || !target.email) throw new AdminError(404, 'ACCOUNT_NOT_FOUND', '계정을 찾을 수 없습니다.');
+        if (target.user_id === user.id || await deps.isAdmin(target.user_id)) {
+          throw new AdminError(403, 'PROTECTED_ACCOUNT', '관리자 계정의 이용 권한은 이 화면에서 변경할 수 없습니다.');
+        }
+        const approved = input.action === 'approve-member';
+        try {
+          await deps.setMembership(user.id, target.user_id, approved);
+        } catch (error) {
+          if (error instanceof AdminError) throw error;
+          throw new AdminError(502, 'MEMBERSHIP_UPDATE_FAILED', '이용 권한을 변경하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        }
+        return reply(200, {
+          message: approved ? '학교 서재 이용을 승인했습니다.' : '학교 서재 이용 승인을 해제했습니다.',
+          approved,
+        });
       }
 
       if (input.action === 'reset-password' || input.action === 'delete-account') {
