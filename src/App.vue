@@ -74,7 +74,10 @@ const tagCounts = computed(() => {
 })
 const filtered = computed(() => matchingQuestions.value
   .filter(q => !tag.value || q.tags.includes(tag.value))
-  .sort((a,b) => sort.value === 'oldest' ? a.year * 100 + a.month - (b.year * 100 + b.month) : b.year * 100 + b.month - (a.year * 100 + a.month)))
+  .sort((a,b) => {
+    const date = a.year * 100 + a.month - (b.year * 100 + b.month)
+    return (sort.value === 'oldest' ? date : -date) || a.grade - b.grade || a.number - b.number
+  }))
 function countText(count: number) {
   return questionsLoading.value ? '…' : questionsError.value ? '–' : count.toLocaleString('ko-KR')
 }

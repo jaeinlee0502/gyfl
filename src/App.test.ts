@@ -60,6 +60,15 @@ beforeEach(() => {
 })
 
 describe('학교 서재 입장과 문제 탐색', () => {
+  it('등록 순서와 관계없이 같은 시험의 문항을 번호순으로 표시한다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    library.questionItems.value = [...records].reverse()
+    await wrapper.get('.sort-select select').setValue('oldest')
+    const titles = wrapper.findAll('.exam-question-title').map(title => title.text())
+    expect(titles).toEqual(['01. 선사 시대의 생활', '20. 현대 사회와 전쟁', '21. 민주주의의 변화'])
+    wrapper.unmount()
+  })
   it('문제 이미지를 누르면 확대하고 닫기·권한 상실 시 확대 창을 지운다', async () => {
     const wrapper = mount(App)
     await flushPromises()
