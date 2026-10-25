@@ -1,0 +1,107 @@
+// @vitest-environment node
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {createImportHandler,ImportError,type ImportDependencies,type ImportRecord} from './core';
+const actor='11111111-1111-4111-8111-111111111111';
+const id='22222222-2222-4222-8222-222222222222';
+const clientId='33333333-3333-4333-8333-333333333333';
+const record: ImportRecord={id,file_name:'문제지.pdf',sha256:'a'.repeat(64),page_count:4,source_path:`imports/${id}/source.pdf`,status:'draft',metadata:{},questions:[],created_at:'2026-10-25',published_at:null};
+const question=()=>({clientId,number:1,title:'검수 문항',tags:['현대사'],points:3,searchText:'원문',regions:[{page:1,left:.1,top:.1,right:.5,bottom:.8}],reviewed:false});
+let deps: ImportDependencies;
+beforeEach(()=>{
+ deps={allowedOrigins:['https://jaeinlee0502.github.io'],verifyUser:vi.fn().mockResolvedValue({id:actor}),isAdmin:vi.fn().mockResolvedValue(true),listImports:vi.fn().mockResolvedValue([record]),createImport:vi.fn().mockResolvedValue(record),getImport:vi.fn().mockResolvedValue(record),saveDraft:vi.fn().mockResolvedValue(record),publish:vi.fn().mockResolvedValue(1),deleteDraft:vi.fn().mockResolvedValue(undefined)};
+});
+async function call(body: unknown,options: {method?:string;token?:string|null;origin?:string;contentType?:string;raw?:string;length?:string}={}) {
+ const headers=new Headers({'authorization':'Bearer '+(options.token??'valid'),'content-type':options.contentType??'application/json'});
+ if(options.token===null)headers.delete('authorization');
+ if(options.origin)headers.set('origin',options.origin);
+ if(options.length)headers.set('content-length',options.length);
+ const method=options.method??'POST';
+ const request=new Request('https://example.test/functions/v1/exam-admin',{method,headers,...(!['GET','OPTIONS'].includes(method)&&{body:options.raw??JSON.stringify(body)})});
+ const response=await createImportHandler(deps)(request);
+ return{response,data:response.status===204?null:await response.json()};
+}
+describe('관리자 PDF 검수 등록 API',()=>{
+ it('실제 토큰과 관리자 조회를 통과해야 초안을 열 수 있다',async()=>{
+  expect((await call({action:'list-imports'},{token:null})).response.status).toBe(401);
+  vi.mocked(deps.verifyUser).mockResolvedValueOnce(null);
+  expect((await call({action:'list-imports'})).response.status).toBe(401);
+  vi.mocked(deps.isAdmin).mockResolvedValueOnce(false);
+  expect((await call({action:'list-imports'})).response.status).toBe(403);
+  expect(deps.listImports).not.toHaveBeenCalled();
+ });
+ it('허용 origin만 CORS를 제공하며 일반 브라우저 밖에서도 인증을 요구한다',async()=>{
+  const denied=await call({action:'list-imports'},{origin:'https://evil.example'});
+  expect(denied.response.status).toBe(403);expect(deps.verifyUser).not.toHaveBeenCalled();
+  const preflight=await call({}, {method:'OPTIONS',token:null,origin:'https://jaeinlee0502.github.io'});
+  expect(preflight.response.status).toBe(204);expect(preflight.response.headers.get('access-control-allow-origin')).toBe('https://jaeinlee0502.github.io');
+  expect((await call({action:'list-imports'})).response.status).toBe(200);
+ });
+ it('요청 방식·내용 형식·잘못된 JSON을 거절한다',async()=>{
+  expect((await call({}, {method:'GET'})).response.status).toBe(405);
+  expect((await call({}, {contentType:'text/plain'})).response.status).toBe(415);
+  expect((await call({}, {raw:'{broken'})).response.status).toBe(400);
+  expect((await call([])).response.status).toBe(400);
+ });
+ it('Content-Length와 실제 UTF-8 바이트를 모두 제한한다',async()=>{
+  expect((await call({action:'list-imports'}, {length:String(512*1024+1)})).response.status).toBe(413);
+  expect((await call({action:'list-imports',text:'한'.repeat(180000)})).response.status).toBe(413);
+  expect(deps.listImports).not.toHaveBeenCalled();
+ });
+ it('초안 목록과 개별 기록을 관리자에게만 반환하고 응답 캐시를 막는다',async()=>{
+  const listed=await call({action:'list-imports'});
+  expect(listed.data.imports).toHaveLength(1);expect(listed.response.headers.get('cache-control')).toBe('no-store');
+  const selected=await call({action:'get-import',id});expect(selected.data.import.id).toBe(id);
+ });
+ it('확인한 파일명·해시·쪽수로 PDF 초안을 만든다',async()=>{
+  const result=await call({action:'create-import',fileName:' 한국사.pdf ',sha256:'A'.repeat(64),pageCount:4});
+  expect(result.response.status).toBe(201);
+  expect(deps.createImport).toHaveBeenCalledWith(actor,{fileName:'한국사.pdf',sha256:'a'.repeat(64),pageCount:4});
+ });
+ it('PDF가 아닌 이름·잘못된 해시·쪽수 범위를 거절한다',async()=>{
+  const base={action:'create-import',fileName:'exam.pdf',sha256:'a'.repeat(64),pageCount:4};
+  for(const invalid of [{fileName:'exam.exe'},{sha256:'not-a-hash'},{pageCount:0},{pageCount:41},{pageCount:1.5}])expect((await call({...base,...invalid})).response.status).toBe(400);
+  expect(deps.createImport).not.toHaveBeenCalled();
+ });
+ it('식별자를 확인하고 없는 초안을 404로 안내한다',async()=>{
+  expect((await call({action:'get-import',id:'other/object'})).response.status).toBe(400);
+  vi.mocked(deps.getImport).mockResolvedValueOnce(null);
+  expect((await call({action:'get-import',id})).response.status).toBe(404);
+ });
+ it('정보가 일부만 인식된 초안과 아직 검수하지 않은 문항을 저장할 수 있다',async()=>{
+  const draft={...question(),tags:[' 현대사 ','현대사']};
+  expect((await call({action:'save-draft',id,metadata:{subject:'한국사',sourceUrl:''},questions:[draft]})).response.status).toBe(200);
+  expect(deps.saveDraft).toHaveBeenCalledWith(actor,id,{subject:'한국사',sourceUrl:''},[{...question(),tags:['현대사']}]);
+ });
+ it('임의 외부 출처·계정 정보가 들어간 링크·잘못된 학년과 시행월은 저장하지 않는다',async()=>{
+  for(const metadata of [{sourceUrl:'http://www.ebsi.co.kr/'},{sourceUrl:'https://www.ebsi.co.kr.evil.example/'},{sourceUrl:'https://user:password@www.ebsi.co.kr/'},{grade:3},{month:4},{year:2024},{subject:'admin'}]){
+   expect((await call({action:'save-draft',id,metadata,questions:[question()]})).response.status).toBe(400);
+  }
+  expect(deps.saveDraft).not.toHaveBeenCalled();
+ });
+ it('문항 번호 중복과 페이지 밖의 추출 영역을 저장하지 않는다',async()=>{
+  expect((await call({action:'save-draft',id,metadata:{},questions:[question(),{...question(),clientId:'44444444-4444-4444-8444-444444444444'}]})).response.status).toBe(400);
+  for(const regions of [[{page:5,left:.1,top:.1,right:.5,bottom:.8}],[{page:1,left:.5,top:.1,right:.1,bottom:.8}],[{page:1,left:-1,top:.1,right:.5,bottom:.8}]])expect((await call({action:'save-draft',id,metadata:{},questions:[{...question(),regions}]})).response.status).toBe(400);
+  expect(deps.saveDraft).not.toHaveBeenCalled();
+ });
+ it('완료 문항 수를 반환하고 서버의 중복·미검수 오류를 유지한다',async()=>{
+  const published=await call({action:'publish',id});expect(published.data.count).toBe(1);expect(deps.publish).toHaveBeenCalledWith(actor,id);
+  vi.mocked(deps.publish).mockRejectedValueOnce(new ImportError(409,'IMPORT_CONFLICT','중복 문항'));
+  const conflict=await call({action:'publish',id});expect(conflict.response.status).toBe(409);expect(conflict.data.code).toBe('IMPORT_CONFLICT');
+  vi.mocked(deps.publish).mockRejectedValueOnce(new ImportError(409,'IMPORT_NOT_READY','검수 필요'));
+  expect((await call({action:'publish',id})).data.code).toBe('IMPORT_NOT_READY');
+ });
+ it('등록한 자료를 초안으로 수정하거나 삭제할 수 없다',async()=>{
+  vi.mocked(deps.getImport).mockResolvedValue({...record,status:'published'});
+  expect((await call({action:'save-draft',id,metadata:{},questions:[]})).response.status).toBe(409);
+  expect((await call({action:'delete-draft',id})).response.status).toBe(409);
+  expect(deps.saveDraft).not.toHaveBeenCalled();expect(deps.deleteDraft).not.toHaveBeenCalled();
+ });
+ it('파일 삭제가 실패한 초안의 재시도를 허용하고 서버 내부 오류는 노출하지 않는다',async()=>{
+  vi.mocked(deps.getImport).mockResolvedValue({...record,deleting_at:'2026-10-25'});
+  expect((await call({action:'delete-draft',id})).response.status).toBe(200);
+  vi.mocked(deps.deleteDraft).mockRejectedValueOnce(new ImportError(502,'STORAGE_DELETE_FAILED','삭제 재시도'));
+  expect((await call({action:'delete-draft',id})).data.code).toBe('STORAGE_DELETE_FAILED');
+  vi.mocked(deps.listImports).mockRejectedValueOnce(new Error('private server details'));
+  const result=await call({action:'list-imports'});expect(result.response.status).toBe(503);expect(JSON.stringify(result.data)).not.toContain('private server details');
+ });
+});

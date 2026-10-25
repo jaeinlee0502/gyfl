@@ -4,6 +4,7 @@ import process from 'node:process'
 import vue from '@vitejs/plugin-vue'
 import { validatePublicConfig } from './scripts/public-config.mjs'
 import publicProject from './config/public-project.json'
+import { pdfAssets } from './scripts/pdf-assets.mjs'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
@@ -18,7 +19,7 @@ export default defineConfig(({ mode }) => {
   validatePublicConfig(accountConfig)
   return {
     base: '/gyfl/',
-    plugins: [vue()],
+    plugins: [vue(), pdfAssets()],
     define: {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(accountConfig.VITE_SUPABASE_URL || ''),
       'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(accountConfig.VITE_SUPABASE_PUBLISHABLE_KEY || ''),

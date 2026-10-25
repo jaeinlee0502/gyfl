@@ -91,8 +91,14 @@
 .exam-question-body { padding: 28px; }
 .exam-question-title { margin: 0 0 22px; font-size: 1.125rem; line-height: 1.7; }
 .exam-question-image { display: block; width: 45%; max-width: 100%; height: auto; margin-inline: auto; }
+.exam-image-button { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.exam-image-button:focus-visible { outline: 2px solid #478464; outline-offset: 5px; border-radius: 6px; }
+.image-zoom-hint { margin: 12px 0 0; text-align: center; color: #728279; font-size: .875rem; }
 .exam-source { margin: 18px 0 0; color: #79877d; font-size: .875rem; }
 .external-explanation { text-decoration: underline; text-underline-offset: 4px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+@media (max-width: 900px) {
+  .exam-question-image { width: 100%; }
+}
 @media (max-width: 640px) {
   .school-entrance { padding: 24px 16px; }
   .entrance-brand { margin-bottom: 28px; font-size: 1.75rem; }

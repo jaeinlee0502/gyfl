@@ -49,6 +49,8 @@ let bookmarks = createBookmarks()
 vi.mock('./account', () => ({ useAccount: () => account, initializeAccount: vi.fn() }))
 vi.mock('./questions', () => ({ useQuestionLibrary: () => library }))
 vi.mock('./bookmarks', () => ({ useBookmarks: () => bookmarks }))
+vi.mock('./components/ExamImportDialog.vue', () => ({ __esModule: true, default: { name: 'ExamImportDialog', emits: ['close', 'published'], template: '<div class="test-import-dialog"></div>' } }))
+vi.mock('./components/QuestionImageDialog.vue', () => ({ __esModule: true, default: { name: 'QuestionImageDialog', props: ['src', 'alt', 'width', 'height'], emits: ['close'], template: '<div class="test-image-dialog"></div>' } }))
 
 beforeEach(() => {
   localStorage.clear()
@@ -58,6 +60,46 @@ beforeEach(() => {
 })
 
 describe('학교 서재 입장과 문제 탐색', () => {
+  it('문제 이미지를 누르면 확대하고 닫기·권한 상실 시 확대 창을 지운다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    await wrapper.get('.exam-image-button').trigger('click')
+    await flushPromises()
+    let viewer = wrapper.findComponent({ name: 'QuestionImageDialog' })
+    expect(viewer.props('src')).toBe('blob:question-21')
+    expect(viewer.props('alt')).toContain('21번 문제 원문')
+    viewer.vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.find('.test-image-dialog').exists()).toBe(false)
+    await wrapper.get('.exam-image-button').trigger('click')
+    await flushPromises()
+    account.isSchoolMember.value = false
+    await flushPromises()
+    expect(wrapper.find('.test-image-dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('관리자만 업로드 창을 열고 등록 후 해당 과목을 새로 불러온다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    expect(wrapper.find('.header-upload').exists()).toBe(false)
+    account.isAdmin.value = true
+    await flushPromises()
+    await wrapper.get('[aria-label="문제 검색"]').setValue('전쟁')
+    await wrapper.get('.header-upload').trigger('click')
+    await flushPromises()
+    wrapper.findComponent({ name: 'ExamImportDialog' }).vm.$emit('published', { count: 2, subject: '수학' })
+    await flushPromises()
+    expect(library.loadQuestions).toHaveBeenCalledTimes(2)
+    expect(wrapper.get<HTMLInputElement>('[aria-label="문제 검색"]').element.value).toBe('')
+    expect(wrapper.get('.subject-tabs .selected').text()).toContain('수학')
+    expect(wrapper.text()).toContain('2개 문항을 등록했어요')
+    await wrapper.get('.header-upload').trigger('click')
+    await flushPromises()
+    account.isAdmin.value = false
+    await flushPromises()
+    expect(wrapper.find('.test-import-dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('로그인하지 않은 방문자에게 문제·메뉴·검색을 표시하거나 요청하지 않는다', async () => {
     account.user.value = null
     library.questionItems.value = [...records]
