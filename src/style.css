@@ -98,14 +98,14 @@ button:disabled:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 1.5rem;
+  font-size: 2rem;
   font-weight: 800;
   letter-spacing: -1.5px;
   padding-left: 12px;
 }
 .brand-icon {
-  width: 34px;
-  height: 36px;
+  width: 40px;
+  height: 42px;
   border-radius: 10px;
   background: #2b725b;
   color: #fff;
@@ -274,6 +274,14 @@ button:disabled:hover {
 }
 .main-shell {
   margin-left: 272px;
+}
+.creator-credit {
+  padding: 8px 43px 0;
+  margin: 0;
+  text-align: right;
+  color: #65756b;
+  font-size: 0.8125rem;
+  line-height: 1.7;
 }
 .topbar {
   height: 73px;
@@ -1074,6 +1082,21 @@ h2 {
   font-size: 0.875rem;
   color: #64786a;
 }
+.rights-notice {
+  margin: 0;
+  padding-bottom: 24px;
+  color: #657169;
+  font-size: 0.75rem;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.help-modal .rights-notice {
+  margin: 24px 0 18px;
+  padding: 16px 0 0;
+  border-top: 1px solid #e4eae4;
+  font-size: 0.75rem;
+  line-height: 1.8;
+}
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1176,6 +1199,10 @@ h2 {
   }
 }
 @media (max-width: 1150px) {
+  .creator-credit {
+    padding-right: 25px;
+    padding-left: 25px;
+  }
   .sidebar {
     width: 256px;
     padding-left: 13px;
@@ -1297,6 +1324,10 @@ h2 {
   }
 }
 @media (max-width: 640px) {
+  .creator-credit {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
   .sidebar {
     transform: translateX(-100%);
     transition: transform 0.2s;

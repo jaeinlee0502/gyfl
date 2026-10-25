@@ -8,7 +8,7 @@ export const subjects: { name: Subject; description: string; tags: string[] }[] 
   { name: '통합과학', description: '현상을 관찰하고 세상을 이해하는 방법', tags: ['물리', '화학', '생명과학', '지구과학', '과학의 기초', '물질의 규칙성', '역학 시스템', '지구 시스템', '생명 시스템', '화학 변화', '생태계', '에너지', '과학과 미래 사회'] },
 ]
 export interface Question {
-  id: string; subject: Subject; grade: 1 | 2; year: number; month: 3 | 6 | 9;
+  id: string; subject: Subject; grade: 1 | 2; year: number; month: 3 | 6 | 9 | 10;
   number: number; title: string; tags: string[]; prompt: string;
   passage: string; choices: string[]; answer: number; explanation: string;
   kind: 'demo'; curriculum: '2022';
