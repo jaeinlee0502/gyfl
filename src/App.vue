@@ -42,7 +42,7 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
 <template>
   <div class="app-shell">
     <div v-if="sidebarOpen" class="sidebar-backdrop" @click="sidebarOpen = false"></div>
-    <aside class="sidebar" :class="{ open: sidebarOpen }" aria-label="과목 탐색">
+    <aside class="sidebar" :class="{ open: sidebarOpen }" aria-label="과목 탐색" tabindex="0">
       <a class="brand" href="#" @click.prevent="reset(); subject = '한국사'"><span class="brand-icon"><Library :size="22" :stroke-width="1.8" /></span><span>문제서재<span class="brand-dot">.</span></span></a>
       <div class="workspace-label">TEACHER'S WORKSPACE</div>
       <div class="nav-label">나의 서재</div>
