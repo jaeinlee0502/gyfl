@@ -1,0 +1,59 @@
+.public-access-note, .account-actions, .account-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.account-actions { margin-left: 18px; font-size: 1rem; }
+.account-name { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; }
+.header-login, .header-admin, .header-logout {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 13px;
+  border-radius: 7px;
+  font-size: 1rem;
+  white-space: nowrap;
+}
+.header-login { background: #2e7058; color: #fff; }
+.header-login:hover { background: #265f4b; color: #fff; }
+.header-admin { background: #edf4ee; color: #30664a; }
+.header-logout { color: #617466; border: 1px solid #dce6dd; }
+.bookmark-account-note, .bookmark-import-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 17px;
+  margin: 14px 0;
+  border: 1px solid #dfe9df;
+  border-radius: 7px;
+  background: #f3f8f2;
+  color: #5b725e;
+  font-size: .875rem;
+  line-height: 1.8;
+}
+.bookmark-account-note button, .bookmark-import-confirm button, .storage-message button {
+  border: 1px solid #bed1c0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #2f6f4b;
+  background: #fff;
+  font-size: .875rem;
+  min-height: 40px;
+}
+.bookmark-import-confirm p { margin: 0; overflow-wrap: anywhere; }
+.bookmark-import-confirm>div { display: flex; flex-wrap: wrap; gap: 9px; }
+.bookmark-button { min-width: 44px; min-height: 44px; align-items: center; justify-content: center; }
+.storage-message { font-size: .875rem; line-height: 1.8; }
+@media (max-width: 1200px) { .public-access-note { display: none; } }
+@media (max-width: 640px) {
+  .topbar { height: auto; min-height: 72px; flex-wrap: wrap; gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+  .topbar-right { margin-left: auto; }
+  .topbar-right .icon-button { margin-left: 0; }
+  .account-actions { margin-left: 0; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .account-name { max-width: 100px; }
+  .header-login, .header-admin, .header-logout { padding: 8px 10px; }
+}

@@ -1,0 +1,6 @@
+project_id = "gyfl"
+
+[functions.account-admin]
+# The handler verifies every non-preflight request with auth.getUser(jwt).
+# The gateway's legacy JWT check does not support modern publishable keys.
+verify_jwt = false
