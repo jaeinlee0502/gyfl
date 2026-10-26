@@ -165,9 +165,6 @@ button:disabled:hover {
 .subjects-label {
   margin-top: 32px;
 }
-.subjects-label span {
-  font-size: 0.875rem;
-}
 .subject-nav {
   display: flex;
   align-items: center;

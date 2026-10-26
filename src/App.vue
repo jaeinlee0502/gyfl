@@ -14,6 +14,10 @@ import { useBookmarks } from './bookmarks'
 const ExamImportDialog = defineAsyncComponent(() => import('./components/ExamImportDialog.vue'))
 const QuestionImageDialog = defineAsyncComponent(() => import('./components/QuestionImageDialog.vue'))
 const rightsNotice = '문항 원문의 저작권은 각 출제·제공기관 및 해당 권리자에게 있으며, 본 사이트는 출처 정보와 학습용 메타데이터를 함께 제공합니다.'
+const subjectNavLabels: Record<Subject, string> = {
+  국어: '국어 영역', 수학: '수학 영역', 영어: '영어 영역', 한국사: '한국사 영역',
+  통합사회: '사회탐구 영역', 통합과학: '과학탐구 영역',
+}
 
 const subject = ref<Subject>('한국사')
 const tag = ref('')
@@ -155,8 +159,8 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
       <div class="nav-label">나의 서재</div>
       <button class="nav-item" :class="{ 'nav-selected': !savedOnly }" @click="savedOnly = false"><LayoutGrid :size="18" /> 전체 문제 탐색 <span class="new-dot"></span></button>
       <button class="nav-item" :class="{ 'nav-selected': savedOnly }" @click="savedOnly = !savedOnly; sidebarOpen = false"><Bookmark :size="18" /> 저장한 문제 <span class="nav-count">{{ saved.length }}</span></button>
-      <div class="nav-label subjects-label">과목별 탐색 <span>6</span></div>
-      <button v-for="(s,i) in subjects" :key="s.name" class="subject-nav" :class="{ active: subject === s.name }" @click="selectSubject(s.name)"><span class="subject-symbol" :class="`symbol-${i}`">{{ ['가','𝑥','A','史','世','⚛'][i] }}</span><span>{{ s.name }}</span><ChevronRight v-if="subject === s.name" :size="15" /></button>
+      <div class="nav-label subjects-label">과목별 탐색</div>
+      <button v-for="(s,i) in subjects" :key="s.name" class="subject-nav" :class="{ active: subject === s.name }" @click="selectSubject(s.name)"><span class="subject-symbol" :class="`symbol-${i}`">{{ ['가','𝑥','A','史','世','⚛'][i] }}</span><span>{{ subjectNavLabels[s.name] }}</span><ChevronRight v-if="subject === s.name" :size="15" /></button>
       <div class="sidebar-note"><span class="note-icon"><GraduationCap :size="21" /></span><strong>새로운 교육과정, 같은 열정</strong><p>2022 개정 교육과정을 위한<br>선생님의 수업 준비 공간입니다.</p><span class="curriculum-label">2022 개정 교육과정</span></div>
       <button class="help-button" @click="helpOpen = true"><CircleHelp :size="17" /> 서재 이용 안내 <ArrowUpRight :size="14" /></button>
       <div class="sidebar-footer">좋은 수업은, 좋은 질문에서.</div>
