@@ -451,6 +451,76 @@ describe('관리자 PDF 업로드와 검수', () => {
     wrapper.unmount()
   })
 
+  it('맨 아래에서 문항과 공통 지문 전체 확인·해제를 초안에 저장한다', async () => {
+    const shared = passage()
+    const second = { ...question(), clientId: '44444444-4444-4444-8444-444444444444', number: 2 }
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, passages: [shared],
+      questions: [question(), second].map(item => ({ ...item, passageClientId: shared.clientId })), warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    const all = wrapper.get('.import-publish-bar .import-review-all')
+    expect(all.text()).toContain('전체 검수 확인')
+    expect(all.attributes('aria-pressed')).toBe('false')
+    await all.trigger('click')
+    expect(all.text()).toContain('전체 확인 해제')
+    expect(all.attributes('aria-pressed')).toBe('true')
+    for (const checkbox of wrapper.findAll('.import-reviewed input')) expect(checkbox.element).toHaveProperty('checked', true)
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeUndefined()
+    await button(wrapper, '초안 저장').trigger('click')
+    await flushPromises()
+    expect(api.saveDraft).toHaveBeenLastCalledWith(record().id, metadata,
+      [expect.objectContaining({ number: 1, reviewed: true }), expect.objectContaining({ number: 2, reviewed: true })],
+      [expect.objectContaining({ clientId: shared.clientId, reviewed: true })])
+    await all.trigger('click')
+    for (const checkbox of wrapper.findAll('.import-reviewed input')) expect(checkbox.element).toHaveProperty('checked', false)
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeDefined()
+    await button(wrapper, '초안 저장').trigger('click')
+    await flushPromises()
+    expect(api.saveDraft).toHaveBeenLastCalledWith(record().id, metadata,
+      [expect.objectContaining({ reviewed: false }), expect.objectContaining({ reviewed: false })],
+      [expect.objectContaining({ reviewed: false })])
+    expect(api.publishImport).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('전체 확인 뒤 수정한 문항만 재검수하고 영역 편집 중에는 전체 확인을 막는다', async () => {
+    const second = { ...question(), clientId: '44444444-4444-4444-8444-444444444444', number: 2 }
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [question(), second], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    const all = wrapper.get('.import-review-all')
+    await all.trigger('click')
+    await wrapper.findAll('.import-question-title-field input')[0]!.setValue('수정한 제목')
+    const checks = wrapper.findAll('.import-question-card .import-reviewed input')
+    expect(checks[0]!.element).toHaveProperty('checked', false)
+    expect(checks[1]!.element).toHaveProperty('checked', true)
+    expect(all.attributes('aria-pressed')).toBe('false')
+    await wrapper.findAll('.import-question-card')[0]!.findAll('button').find(item => item.text() === '영역 조정')!.trigger('click')
+    await flushPromises()
+    expect(all.attributes('disabled')).toBeDefined()
+    await all.trigger('click')
+    expect(checks[0]!.element).toHaveProperty('checked', false)
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeDefined()
+    await button(wrapper, '영역 수정 취소').trigger('click')
+    await all.trigger('click')
+    expect(checks[0]!.element).toHaveProperty('checked', true)
+    expect(checks[1]!.element).toHaveProperty('checked', true)
+    wrapper.unmount()
+  })
+
+  it('일괄 확인해도 태그가 없는 문항은 등록할 수 없다', async () => {
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [{ ...question(), tags: [] }], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await wrapper.get('.import-review-all').trigger('click')
+    expect(wrapper.get('.import-question-card .import-reviewed input').element).toHaveProperty('checked', true)
+    const publish = wrapper.get('.import-publish-bar .import-primary')
+    expect(publish.attributes('disabled')).toBeDefined()
+    await publish.trigger('click')
+    expect(api.publishImport).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('원본에서 제목을 읽는 동안 권한이 사라지면 추천을 적용하거나 저장하지 않는다', async () => {
     let finish!: (value: string) => void
     pdf.regionText.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))

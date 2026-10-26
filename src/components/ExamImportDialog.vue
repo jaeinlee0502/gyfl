@@ -61,6 +61,13 @@ const completeMetadata = computed<ExamImportMetadata | null>(() => {
 const selectedSubject = computed(() => subjects.find(s => s.name === metadata.subject))
 const reviewedCount = computed(() => questions.value.filter(q => q.reviewed).length)
 const reviewedPassageCount = computed(() => passages.value.filter(p => p.reviewed).length)
+const allReviewed = computed(() => questions.value.length > 0
+  && reviewedCount.value === questions.value.length && reviewedPassageCount.value === passages.value.length)
+const canToggleReview = computed(() => allowed.value && !busy.value && !editingId.value
+  && Boolean(activeRecord.value && document.value) && questions.value.length > 0
+  && questions.value.every(question => previews.has(question.clientId))
+  && passages.value.every(passage => passage.regions.length > 0
+    && passage.regions.every((_, index) => passagePreviews.has(passageImageKey(passage.clientId, index)))))
 const passageMap = computed(() => new Map(passages.value.map(p => [p.clientId, p])))
 const selectedTitleCount = computed(() => titleCandidates.value?.filter(candidate => candidate.selected && currentTitleCandidate(candidate)).length ?? 0)
 const passagesValid = computed(() => passages.value.length <= 100
@@ -145,6 +152,14 @@ function markChanged(question?: ImportQuestionDraft) {
   dirty.value = true
   notice.value = ''
   if (question) { question.reviewed = false; delete titleSuggestions[question.clientId] }
+}
+function toggleAllReviewed() {
+  if (!canToggleReview.value) return
+  const reviewed = !allReviewed.value
+  for (const question of questions.value) question.reviewed = reviewed
+  for (const passage of passages.value) passage.reviewed = reviewed
+  dirty.value = true
+  notice.value = ''
 }
 function titleInput(question: ImportQuestionDraft) {
   return { subject: metadata.subject, number: question.number, text: question.searchText,
@@ -703,7 +718,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
           <div v-if="pagePreview" class="import-page-selector" @pointerdown="startSelection" @pointermove="moveSelection" @pointerup="endSelection" @pointercancel="dragStart = null"><img :src="pagePreview.url" :alt="`${pagePreview.page}쪽 원본 페이지, 드래그하여 영역 선택`" draggable="false"><span class="import-crop-overlay" :style="regionStyle"></span></div><p v-else class="import-small" role="status">원본 페이지를 준비하고 있어요…</p>
           <div class="import-actions"><button class="import-secondary" :disabled="busy" @click="finishRegionEdit">영역 수정 취소</button><button class="import-primary" :disabled="busy" @click="applyRegions">영역 적용·미리보기 갱신</button></div>
         </section>
-        <footer class="import-publish-bar"><div><strong>확인 {{ reviewedCount }}/{{ questions.length }}문항 · 공통 지문 {{ reviewedPassageCount }}/{{ passages.length }}개</strong><p>{{ editingId ? '영역 수정을 적용하거나 취소한 뒤 저장·등록해 주세요.' : !completeMetadata ? '시험 정보와 EBS 링크를 모두 확인해 주세요.' : !passagesValid ? '공통 지문의 제목·영역·연결 문항을 확인해 주세요. 연결하지 않은 지문은 삭제하거나 문항에 연결해 주세요.' : reviewedPassageCount !== passages.length ? '공통 지문 전체와 이어지는 순서 확인을 마쳐 주세요.' : !questionsValid ? '문항 번호·제목·태그·영역·지문 연결을 확인해 주세요.' : reviewedCount !== questions.length ? '모든 문항의 이미지와 태그 확인을 마치면 등록할 수 있어요.' : '확인한 문항을 학교 서재에 등록할 수 있어요.' }}</p></div><div class="import-actions"><button class="import-secondary" :disabled="busy || !!editingId" @click="save"><Save :size="18" /> 초안 저장</button><button class="import-primary" :disabled="!canPublish" @click="publish">{{ publishing ? '등록 중…' : '확인한 문제 등록' }}</button></div></footer>
+        <footer class="import-publish-bar"><div><strong>확인 {{ reviewedCount }}/{{ questions.length }}문항 · 공통 지문 {{ reviewedPassageCount }}/{{ passages.length }}개</strong><p>{{ editingId ? '영역 수정을 적용하거나 취소한 뒤 저장·등록해 주세요.' : !completeMetadata ? '시험 정보와 EBS 링크를 모두 확인해 주세요.' : !passagesValid ? '공통 지문의 제목·영역·연결 문항을 확인해 주세요. 연결하지 않은 지문은 삭제하거나 문항에 연결해 주세요.' : reviewedPassageCount !== passages.length ? '공통 지문 전체와 이어지는 순서 확인을 마쳐 주세요.' : !questionsValid ? '문항 번호·제목·태그·영역·지문 연결을 확인해 주세요.' : reviewedCount !== questions.length ? '모든 문항의 이미지와 태그 확인을 마치면 등록할 수 있어요.' : '확인한 문항을 학교 서재에 등록할 수 있어요.' }}</p></div><div class="import-actions"><button type="button" class="import-secondary import-review-all" :disabled="!canToggleReview" :aria-pressed="allReviewed" @click="toggleAllReviewed"><Check :size="18" /> {{ allReviewed ? '전체 확인 해제' : '전체 검수 확인' }}</button><button class="import-secondary" :disabled="busy || !!editingId" @click="save"><Save :size="18" /> 초안 저장</button><button class="import-primary" :disabled="!canPublish" @click="publish">{{ publishing ? '등록 중…' : '확인한 문제 등록' }}</button></div></footer>
       </template>
     </div>
   </dialog>
