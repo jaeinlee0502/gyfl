@@ -1,6 +1,8 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { subjects, type Subject } from './data'
+import { suggestQuestionTitle } from './question-titles'
+import { hasPrivateUseCharacters, normalizeKnownEquationText } from './pdf-text'
 import {
   MAX_PDF_BYTES, MAX_PDF_PAGES, ebsExamListUrl,
   type ExamImportMetadata, type ExamPdfAnalysis, type ImportQuestionDraft, type ImportPassageDraft,
@@ -64,7 +66,7 @@ const concepts: Partial<Record<Subject, Record<string, RegExp>>> = {
     '문화사': /문화|교육|불교|유교|훈민정음|서원|학교|학문|과학\s*기술|미술|도자기/,
   },
   국어: { '현대시': /화자|시적|시어|백석|나희덕|현대시/, '고전시가': /시조|가사|향가|고려\s*가요|윤선도|제\s*\d\s*수|하노라/, '현대소설': /서술자|인물의\s*심리|소설|이문구/, '고전소설': /고전\s*소설|작자\s*미상|(?:^|\s)(?:천자|태자|소자)(?=[\s은는이가을를의께와과도에]|$)/, '고전산문': /고전\s*산문|홍석주|전간대/, '독서': /독서|윗글의\s*내용|공리주의|효용\s*이론|광합성|형사법|민사법|법규|경제학/, '인문·예술': /공리주의|철학|예술|도덕/, '사회·문화': /경제학|사회|법규|형사|민사|효용/, '과학·기술': /광합성|세포|과학|이산화\s*탄소/, '문법': /음운|형태소|품사|문장\s*성분|높임|용언|대명사|의미\s*자질|사이시옷/, '화법': /(?:^|\s)(?:발표|토론|토의|회의|대화)(?=[\s은는이가을를의에할하]|$)/, '작문': /초고|고쳐\s*쓰기|작문|글쓰기/, '매체': /매체|인터넷|누리\s*소통망/ },
-  수학: { '다항식': /다항식|나머지정리|인수분해/, '방정식과 부등식': /방정식|부등식|두\s*근/, '경우의 수': /경우의\s*수|순열|조합/, '행렬': /행렬/, '도형의 방정식': /원의\s*방정식|직선의\s*방정식|좌표평면/, '집합과 명제': /집합|명제/, '함수': /함수/, '지수와 로그': /지수|로그/, '삼각함수': /삼각함수/, '삼각비': /삼각비|\b(?:sin|cos|tan)\b/i, '제곱근': /제곱근|무리수|근호/, '일차함수': /일차\s*함수/, '닮음': /닮음|닮은/, '원주각': /원주각/, '순환소수': /순환\s*소수/, '분산': /분산|편차|표준\s*편차/, '피타고라스 정리': /피타고라스/, '수열': /수열|등차|등비/, '미분': /미분|도함수|미분계수/, '적분': /적분/, '확률과 통계': /확률|통계|분산|표준편차|도수분포/ },
+  수학: { '다항식': /다항식|나머지정리|인수분해/, '방정식과 부등식': /방정식|부등식|두\s*근/, '경우의 수': /경우의\s*수|순열|조합/, '행렬': /행렬/, '도형의 방정식': /원의\s*방정식|직선의\s*방정식|좌표평면/, '집합과 명제': /집합|명제/, '함수': /함수/, '지수와 로그': /지수|로그/, '삼각함수': /삼각함수/, '삼각비': /삼각비|\b(?:sin|cos|tan)\b/i, '제곱근': /제곱근|무리수|근호|√/, '일차함수': /일차\s*함수/, '닮음': /닮음|닮은/, '원주각': /원주각/, '순환소수': /순환\s*소수/, '분산': /분산|편차|표준\s*편차/, '피타고라스 정리': /피타고라스/, '수열': /수열|등차|등비/, '미분': /미분|도함수|미분계수/, '적분': /적분/, '확률과 통계': /확률|통계|분산|표준편차|도수분포/ },
   영어: { '주제·제목': /주제로|제목으로/, '요지·주장': /요지로|주장하는/, '목적·심경': /목적으로|심경|분위기/, '빈칸 추론': /빈칸/, '글의 순서': /순서로|순서에\s*맞게|배열한/, '문장 삽입': /들어가기에|주어진\s*문장/, '어법': /어법상/, '어휘': /낱말의\s*쓰임|문맥상|의미\s*하는/, '내용 일치': /내용과\s*일치|내용으로\s*적절하지/, '요약': /요약/, '무관한 문장': /전체\s*흐름과\s*관계|흐름과\s*관계|무관한\s*문장/, '지칭 추론': /가리키는\s*대상|지칭/, '듣기': /대화를\s*듣고|말을\s*듣고/ },
   통합사회: { '인권': /인권|기본권/, '헌법': /헌법|입헌/, '사회정의': /정의|분배|불평등/, '시장경제': /시장|수요|공급|경제/, '금융': /금융|예금|주식|채권|환율/, '지리': /지도|지형|지역|인구|독도|태양광|아이슬란드|페루|지리\s*정보/, '기후와 환경': /기후|환경|강수|온난화|자연재해/, '문화': /문화/, '사회문화': /사회화|사회\s*집단/, '세계사': /세계사|문명/, '세계화': /세계화|국제\s*교역/, '평화': /평화|분쟁|통일/, '지속가능발전': /지속\s*가능/, '윤리': /윤리|도덕|사상가|행복|쾌락|칸트|롤스|아리스토텔레스|에피쿠로스|레오폴드|유교|불교|도가/, '정치': /민주|정부\s*형태|정치|의회|대통령/, '법': /재판|형사|민사|법원|소송/, '경제': /경제|환율|수요|공급|물가|통화|재정/ },
   통합과학: { '물리': /힘|속도|가속도|운동량|전류|자기장|부력|저항|전압|비열|열평형|자유\s*낙하|열[이가은는을]?\s*이동/, '화학': /원소|화학|분자|원자|이온|기체|흡열|발열|상태\s*변화/, '생명과학': /생명|세포|유전|효소|광합성|기공|신경|염색체|혈액|감수\s*분열/, '지구과학': /지구|지층|대기|천체|판의\s*운동|해륙풍|월식|은하|태양계|해수|암석|지질|달의\s*위상/, '물질의 규칙성': /주기율|주기적/, '역학 시스템': /역학|중력|운동/, '지구 시스템': /수권|기권|지권/, '생명 시스템': /생명|세포/, '화학 변화': /산화|환원|산과\s*염기/, '생태계': /생태계|먹이\s*사슬/, '에너지': /에너지|발전|전력|비열|열평형|열[이가은는을]?\s*이동/, '과학과 미래 사회': /인공지능|빅데이터|미래\s*사회/ },
@@ -259,18 +261,16 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
       bottom: Math.max(bottom, anchor.y + .025),
     }
     const text = textInside(page, region)
-    const firstLine = page.runs.filter(run => run.top >= anchor.y - .005 && run.top < anchor.y + .025 && run.left >= region.left && run.left < region.right)
-      .sort((a, b) => Math.abs(a.top - b.top) < .003 ? a.left - b.left : a.top - b.top).map(run => run.text).join(' ')
     const instruction = instructionByNumber.get(anchor.number) ?? ''
     const passage = passageByNumber.get(anchor.number)
-    const firstLineTitle = firstLine.replace(/^\s*\d+\s*\.\s*/, '').replace(/\[\s*\d\s*점\s*\]/g, '').trim()
-    const title = (firstLineTitle || instruction || `${metadata.subject ?? '모의고사'} ${anchor.number}번`).slice(0, 160)
     const responseType = shortAnswerStart && readingOrder(anchor) > readingOrder(shortAnswerStart) ? 'short_answer' as const : 'multiple_choice' as const
     // Common-passage text informs suggestions, but is stored once separately.
     const tagText = `${instruction}\n${passage?.searchText ?? ''}\n${text}`
+    const tags = suggestQuestionTags(metadata.subject, tagText)
+    const title = suggestQuestionTitle({ subject: metadata.subject, number: anchor.number, text, passageText: passage?.searchText, instruction, tags })
     return {
       clientId: crypto.randomUUID(), number: anchor.number, title,
-      tags: suggestQuestionTags(metadata.subject, tagText), points: Number(/\[\s*([1-9])\s*점\s*\]/.exec(text)?.[1] ?? 2),
+      tags, points: Number(/\[\s*([1-9])\s*점\s*\]/.exec(text)?.[1] ?? 2),
       searchText: text.slice(0, 20000), regions: [region], reviewed: false,
       responseType, ...(passage ? { passageClientId: passage.clientId } : {}), ...(instruction ? { instruction } : {}),
     }
@@ -326,7 +326,7 @@ export async function openExamPdf(file: File): Promise<ExamPdfDocument> {
   const pdfjs = await import('pdfjs-dist')
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
   const task = pdfjs.getDocument({
-    data: bytes, stopAtErrors: true,
+    data: bytes, stopAtErrors: true, fontExtraProperties: true,
     cMapUrl: `${import.meta.env.BASE_URL}pdfjs/cmaps/`, cMapPacked: true,
     standardFontDataUrl: `${import.meta.env.BASE_URL}pdfjs/standard_fonts/`,
     wasmUrl: `${import.meta.env.BASE_URL}pdfjs/wasm/`,
@@ -352,13 +352,24 @@ export async function openExamPdf(file: File): Promise<ExamPdfDocument> {
       const page = await document.getPage(number)
       const viewport = page.getViewport({ scale: 1 })
       const content = await page.getTextContent()
+      // Font names become available when the page's operators load. Only do
+      // this extra work on pages with private-use glyphs; failures retain the
+      // original text, and images always render from the original PDF.
+      if (content.items.some(item => 'str' in item && hasPrivateUseCharacters(item.str))) {
+        try { await page.getOperatorList() } catch { ensureOpen() }
+      }
       const runs: PdfTextRun[] = []
       for (const item of content.items) {
         if (!('str' in item) || !item.str.trim()) continue
+        let text = item.str
+        if (hasPrivateUseCharacters(text) && page.commonObjs.has(item.fontName)) {
+          const font = page.commonObjs.get(item.fontName) as { name?: unknown } | undefined
+          text = normalizeKnownEquationText(text, font?.name)
+        }
         const transform = pdfjs.Util.transform(viewport.transform, item.transform)
         const h = Math.max(1, Math.hypot(transform[2]!, transform[3]!))
         const x = transform[4]!, baseline = transform[5]!
-        runs.push({ text: item.str, left: clamp(x / viewport.width), top: clamp((baseline - h * .9) / viewport.height), right: clamp((x + item.width) / viewport.width), bottom: clamp((baseline + h * .2) / viewport.height) })
+        runs.push({ text, left: clamp(x / viewport.width), top: clamp((baseline - h * .9) / viewport.height), right: clamp((x + item.width) / viewport.width), bottom: clamp((baseline + h * .2) / viewport.height) })
       }
       pages.push({ page: number, runs })
     }

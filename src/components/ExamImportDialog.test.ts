@@ -44,14 +44,17 @@ let account = createAccount()
 let api = createApi()
 let pdf = createPdf()
 const openPdf = vi.hoisted(() => vi.fn())
+const titleRecommendation = vi.hoisted(() => vi.fn())
 vi.mock('../account', () => ({ useAccount: () => account }))
 vi.mock('../exam-imports', () => ({ useExamImports: () => api }))
 vi.mock('../pdf-import', () => ({ openExamPdf: openPdf }))
+vi.mock('../question-titles', () => ({ suggestQuestionTitle: titleRecommendation }))
 
 beforeEach(() => {
   vi.unstubAllGlobals()
   account = createAccount(); api = createApi(); pdf = createPdf()
   openPdf.mockReset().mockResolvedValue(pdf)
+  titleRecommendation.mockReset().mockReturnValue('새로 추천한 주제 제목')
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value: function (this: HTMLDialogElement) { this.setAttribute('open', '') } })
   Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value: function (this: HTMLDialogElement) { this.removeAttribute('open') } })
   Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn().mockReturnValue('blob:question-preview') })
@@ -329,6 +332,140 @@ describe('관리자 PDF 업로드와 검수', () => {
     await wrapper.get('.import-passage-reviewed input').setValue(true)
     await wrapper.get('.import-question-card .import-reviewed input').setValue(true)
     expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('제목 추천은 공통 지문을 참고하되 적용 전 직접 쓴 제목과 검수 상태를 바꾸지 않는다', async () => {
+    const shared = { ...passage(), reviewed: true }
+    const first = { ...question(), title: '선생님이 정한 제목', passageClientId: shared.clientId, instruction: '서술 방식을 비교하시오.', reviewed: true }
+    const second = { ...question(), clientId: '44444444-4444-4444-8444-444444444444', number: 2, reviewed: true }
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, passages: [shared], questions: [first, second], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await wrapper.get('.import-passage-reviewed input').setValue(true)
+    for (const checkbox of wrapper.findAll('.import-question-card .import-reviewed input')) await checkbox.setValue(true)
+    const card = wrapper.findAll('.import-question-card')[0]!
+    const title = card.get('.import-question-title-field input')
+    await card.get('.import-title-tools button').trigger('click')
+    await flushPromises()
+    expect(titleRecommendation).toHaveBeenCalledWith({ subject: '한국사', number: 1, text: first.searchText,
+      passageText: shared.searchText, instruction: first.instruction, tags: first.tags })
+    expect(title.element).toHaveProperty('value', '선생님이 정한 제목')
+    expect(card.get('.import-reviewed input').element).toHaveProperty('checked', true)
+    const rendered = pdf.renderQuestion.mock.calls.length
+    await card.findAll('button').find(button => button.text() === '추천 제목 적용')!.trigger('click')
+    expect(title.element).toHaveProperty('value', '새로 추천한 주제 제목')
+    expect(card.get('.import-reviewed input').element).toHaveProperty('checked', false)
+    expect(wrapper.findAll('.import-question-card')[1]!.get('.import-reviewed input').element).toHaveProperty('checked', true)
+    expect(wrapper.get('.import-passage-reviewed input').element).toHaveProperty('checked', true)
+    expect(pdf.renderQuestion.mock.calls).toHaveLength(rendered)
+    await button(wrapper, '초안 저장').trigger('click')
+    await flushPromises()
+    expect(api.saveDraft).toHaveBeenCalledWith(record().id, metadata, [
+      expect.objectContaining({ title: '새로 추천한 주제 제목', tags: first.tags, regions: first.regions, passageClientId: shared.clientId, reviewed: false }),
+      expect.objectContaining({ title: second.title, reviewed: true }),
+    ], [expect.objectContaining({ clientId: shared.clientId, reviewed: true })])
+    wrapper.unmount()
+  })
+
+  it('일괄 추천은 깨진 제목만 기본 선택하고 직접 쓴 제목은 명시적으로 선택할 때 바꾼다', async () => {
+    const first = { ...question(), title: '\ue001 1. \ue002의 값은?', reviewed: true }
+    const second = { ...question(), clientId: '44444444-4444-4444-8444-444444444444', number: 2, title: '선생님이 직접 쓴 제목', reviewed: true }
+    titleRecommendation.mockImplementation(({ number }: { number: number }) => `개념 ${number}의 이해`)
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [first, second], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    for (const checkbox of wrapper.findAll('.import-question-card .import-reviewed input')) await checkbox.setValue(true)
+    await button(wrapper, '제목 일괄 추천').trigger('click')
+    await flushPromises()
+    const choices = wrapper.findAll('.import-title-candidate input')
+    expect(choices[0]!.element).toHaveProperty('checked', true)
+    expect(choices[1]!.element).toHaveProperty('checked', false)
+    expect(wrapper.get('.import-title-bulk').text()).toContain('선생님이 직접 쓴 제목')
+    await button(wrapper, '선택한 제목 1개 적용').trigger('click')
+    expect(wrapper.findAll('.import-question-title-field input')[0]!.element).toHaveProperty('value', '개념 1의 이해')
+    expect(wrapper.findAll('.import-question-title-field input')[1]!.element).toHaveProperty('value', '선생님이 직접 쓴 제목')
+    expect(wrapper.findAll('.import-question-card .import-reviewed input')[1]!.element).toHaveProperty('checked', true)
+    await button(wrapper, '제목 일괄 추천').trigger('click')
+    await flushPromises()
+    await button(wrapper, '모두 선택').trigger('click')
+    await button(wrapper, '선택한 제목 1개 적용').trigger('click')
+    expect(wrapper.findAll('.import-question-title-field input')[1]!.element).toHaveProperty('value', '개념 2의 이해')
+    expect(wrapper.findAll('.import-question-card .import-reviewed input')[1]!.element).toHaveProperty('checked', false)
+    wrapper.unmount()
+  })
+
+  it('추천 후 문항이나 제목을 수정하면 오래된 추천으로 덮어쓰지 않는다', async () => {
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, '제목 일괄 추천').trigger('click')
+    await flushPromises()
+    await button(wrapper, '모두 선택').trigger('click')
+    await wrapper.get('.import-instruction-field').setValue('새로 수정한 조건')
+    expect(wrapper.get('.import-title-candidate input').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '선택한 제목 0개 적용').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.import-title-candidate').text()).toContain('다시 추천해 주세요')
+    await button(wrapper, '제목 추천 닫기').trigger('click')
+    await wrapper.get('.import-title-tools button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.import-title-suggestion').exists()).toBe(true)
+    await wrapper.get('.import-question-title-field input').setValue('직접 고친 최종 제목')
+    expect(wrapper.find('.import-title-suggestion').exists()).toBe(false)
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', '직접 고친 최종 제목')
+    wrapper.unmount()
+  })
+
+  it('저장된 초안을 열 때에는 제목을 자동 추천하거나 변경하지 않는다', async () => {
+    const saved = { ...record(), questions: [{ ...question(), title: '저장해 둔 수업용 제목', reviewed: true }] }
+    api.listImports.mockResolvedValueOnce([saved])
+    api.getImport.mockResolvedValueOnce(saved)
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises()
+    await button(wrapper, '이어서 검수').trigger('click')
+    await flushPromises()
+    expect(titleRecommendation).not.toHaveBeenCalled()
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', '저장해 둔 수업용 제목')
+    expect(wrapper.get('.import-question-card .import-reviewed input').element).toHaveProperty('checked', true)
+    wrapper.unmount()
+  })
+
+  it('깨진 수식이 있는 기존 초안은 원본 영역을 제목 추천에만 다시 읽고 검색 본문은 보존한다', async () => {
+    const oldText = '1. \ue001\ue002\ue003의 값은?'
+    const saved = { ...record(), metadata: { ...metadata, subject: '수학' as const }, questions: [{ ...question(), title: oldText, searchText: oldText }] }
+    api.listImports.mockResolvedValueOnce([saved]); api.getImport.mockResolvedValueOnce(saved)
+    pdf.regionText.mockResolvedValueOnce('√6 × √(1/2) + √3의 값은?')
+    titleRecommendation.mockReturnValueOnce('제곱근의 곱셈과 덧셈')
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises()
+    await button(wrapper, '이어서 검수').trigger('click')
+    await flushPromises()
+    await wrapper.get('.import-title-tools button').trigger('click')
+    await flushPromises()
+    expect(pdf.regionText).toHaveBeenCalledWith(question().regions)
+    expect(titleRecommendation).toHaveBeenCalledWith(expect.objectContaining({ subject: '수학', text: '√6 × √(1/2) + √3의 값은?' }))
+    await button(wrapper, '추천 제목 적용').trigger('click')
+    await button(wrapper, '초안 저장').trigger('click')
+    await flushPromises()
+    expect(api.saveDraft).toHaveBeenCalledWith(record().id, saved.metadata,
+      [expect.objectContaining({ title: '제곱근의 곱셈과 덧셈', searchText: oldText, regions: question().regions })], [])
+    wrapper.unmount()
+  })
+
+  it('원본에서 제목을 읽는 동안 권한이 사라지면 추천을 적용하거나 저장하지 않는다', async () => {
+    let finish!: (value: string) => void
+    pdf.regionText.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [{ ...question(), searchText: '\ue001' }], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await wrapper.get('.import-title-tools button').trigger('click')
+    account.isAdmin.value = false
+    await flushPromises()
+    finish('제곱근의 값을 구하시오.')
+    await flushPromises()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(wrapper.find('.import-title-suggestion').exists()).toBe(false)
+    expect(api.saveDraft).not.toHaveBeenCalled()
+    expect(api.publishImport).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })
