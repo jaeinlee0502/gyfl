@@ -294,4 +294,80 @@ describe('학교 서재 입장과 문제 탐색', () => {
     expect(library.loadQuestions).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
+
+  it('공통 지문은 한 번 표시하고 저장·검색·태그 개수는 개별 문항을 기준으로 유지한다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    const sharedPassage = { id: 'passage-korean-22', title: '이문구 「암소」', text: '황씨와 암소가 등장하는 이야기',
+      images: [{ imageUrl: 'blob:shared-passage', width: 900, height: 1800, page: 8 }] }
+    library.questionItems.value = [
+      exam('korean-22', 22, '서술 방식 파악', ['현대소설', '서술방식'], { subject: '국어', sharedPassage }),
+      exam('korean-23', 23, '인물의 행동 이해', ['현대소설', '내용이해'], { subject: '국어', sharedPassage }),
+      exam('korean-13', 13, '단어의 의미 관계', ['문법'], { subject: '국어' }),
+    ]
+    await wrapper.findAll('.subject-tabs button').find(button => button.text().includes('국어'))!.trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(3)
+    expect(wrapper.findAll('.shared-passage-card')).toHaveLength(1)
+    expect(wrapper.findAll('.shared-passage-image')).toHaveLength(1)
+    const modernCount = () => wrapper.findAll('.tags button').find(button => button.text().includes('현대소설'))!.get('.tag-count').text()
+    expect(modernCount()).toBe('2')
+
+    await wrapper.get('[aria-label="문제 검색"]').setValue('황씨')
+    expect(wrapper.findAll('.question-card')).toHaveLength(2)
+    await wrapper.get('[aria-label="문제 검색"]').setValue('서술방식')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.shared-passage-card').text()).toContain('이문구 「암소」')
+    await wrapper.get('.bookmark-button').trigger('click')
+    expect(bookmarks.toggleSaved).toHaveBeenCalledWith('korean-22')
+    await wrapper.get('.filter-reset').trigger('click')
+    await wrapper.get('.saved-filter').trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.question-card').text()).toContain('서술 방식 파악')
+    expect(wrapper.get('.result-count').text()).toBe('1')
+    expect(modernCount()).toBe('1')
+    await wrapper.get('.shared-passage-toggle').trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(2)
+    expect(wrapper.findAll('.related-question-card')).toHaveLength(1)
+    expect(wrapper.findAll('.shared-passage-card')).toHaveLength(1)
+    expect(wrapper.get('.result-count').text()).toBe('1')
+    expect(modernCount()).toBe('1')
+    expect(bookmarks.saved.value).toEqual(['korean-22'])
+    await wrapper.get('[aria-label="문제 검색"]').setValue('방식')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.shared-passage-toggle').attributes('aria-expanded')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('공통 지문도 같은 확대 창을 사용하고 자료를 새로 불러오면 기존 확대 창을 닫는다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    library.questionItems.value = [exam('group-1', 1, '공통 지문 문항', ['현대사'], {
+      sharedPassage: { id: 'passage-1', title: '공통 자료', text: '읽기 자료',
+        images: [{ imageUrl: 'blob:shared-one', width: 800, height: 1700, page: 2 }] },
+    })]
+    await flushPromises()
+    await wrapper.get('.passage-image-button').trigger('click')
+    await flushPromises()
+    const viewer = wrapper.findComponent({ name: 'QuestionImageDialog' })
+    expect(viewer.props()).toMatchObject({ src: 'blob:shared-one', alt: '공통 자료 · 공통 지문 1번째 영역', width: 800, height: 1700 })
+    library.questionItems.value = []
+    await flushPromises()
+    expect(wrapper.find('.test-image-dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('단답형과 공통 풀이 안내를 표시하며 안내 문구로도 검색할 수 있다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    library.questionItems.value = [exam('math-22', 22, '식의 계산', ['다항식'], {
+      subject: '수학', instruction: '정수로 답을 쓰시오.', responseType: 'short_answer',
+    })]
+    await wrapper.findAll('.subject-tabs button').find(button => button.text().includes('수학'))!.trigger('click')
+    await wrapper.get('[aria-label="문제 검색"]').setValue('정수')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.question-instruction').text()).toBe('정수로 답을 쓰시오.')
+    expect(wrapper.get('.response-type').text()).toContain('단답형')
+    expect(wrapper.find('.choices').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })

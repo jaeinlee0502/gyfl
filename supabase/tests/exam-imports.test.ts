@@ -73,7 +73,7 @@ beforeAll(async () => {
     grant select, insert, update, delete on storage.objects to authenticated;
     grant all on storage.objects, storage.buckets to service_role;
   `);
-  for (const migration of ['202610250001_accounts_and_bookmarks.sql', '202610250002_school_library.sql', '202610250003_exam_imports.sql']) {
+  for (const migration of ['202610250001_accounts_and_bookmarks.sql', '202610250002_school_library.sql', '202610250003_exam_imports.sql', '202610260001_shared_passages.sql']) {
     await db.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
   }
 }, 20000);

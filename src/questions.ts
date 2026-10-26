@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { subjects, type Question, type Subject } from './data'
+import { subjects, type ExamPassage, type Question, type Subject } from './data'
 import { supabase } from './lib/supabase'
 
 interface ExamRecord {
@@ -7,6 +7,32 @@ interface ExamRecord {
   number: number; title: string; tags: string[]; image_path: string;
   width: number; height: number; points: number; source_url: string;
   explanation_url: string; source_page: number; curriculum_status: string; search_text: string;
+  passage_id?: string | null; instruction?: string; response_type?: string;
+}
+
+interface PassageRecord {
+  id: string; title: string; search_text: string;
+  images: Array<{ path: string; width: number; height: number; page: number }>;
+}
+
+function validPath(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 600
+    && /^[A-Za-z0-9][A-Za-z0-9/_\-.]*$/.test(value)
+    && !value.split('/').some(part => part === '..' || part === '.' || !part)
+}
+
+function validSize(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 10000
+}
+
+function validPassage(passage: PassageRecord) {
+  return typeof passage.id === 'string' && passage.id.length > 0 && passage.id.length <= 200
+    && typeof passage.title === 'string' && passage.title.trim().length > 0 && passage.title.length <= 200
+    && typeof passage.search_text === 'string' && passage.search_text.length <= 30000
+    && Array.isArray(passage.images) && passage.images.length > 0 && passage.images.length <= 12
+    && new Set(passage.images.map(image => image?.path)).size === passage.images.length
+    && passage.images.every(image => image && validPath(image.path) && validSize(image.width) && validSize(image.height)
+      && Number.isInteger(image.page) && image.page >= 1 && image.page <= 40)
 }
 
 function officialLink(value: string) {
@@ -19,9 +45,11 @@ function officialLink(value: string) {
 function validRecord(q: ExamRecord) {
   return subjects.some(s => s.name === q.subject) && [1, 2].includes(q.grade)
     && [3, 6, 9, 10].includes(q.month) && Array.isArray(q.tags)
-    && q.tags.every(t => typeof t === 'string') && typeof q.image_path === 'string'
-    && !q.image_path.startsWith('/') && !q.image_path.split('/').includes('..')
-    && q.width > 0 && q.height > 0
+    && q.tags.every(t => typeof t === 'string') && validPath(q.image_path)
+    && validSize(q.width) && validSize(q.height)
+    && (q.passage_id == null || (typeof q.passage_id === 'string' && q.passage_id.length > 0 && q.passage_id.length <= 200))
+    && (q.instruction === undefined || (typeof q.instruction === 'string' && q.instruction.length <= 2000))
+    && (q.response_type === undefined || q.response_type === 'multiple_choice' || q.response_type === 'short_answer')
 }
 
 // Exam text and images live in RLS-protected Supabase tables/private storage.
@@ -59,7 +87,7 @@ export function useQuestionLibrary() {
       const pageSize = 200
       for (let offset = 0; ; offset += pageSize) {
         const { data, error: queryError } = await client.from('exam_questions')
-          .select('id,subject,grade,year,month,number,title,tags,image_path,width,height,points,source_url,explanation_url,source_page,curriculum_status,search_text')
+          .select('id,subject,grade,year,month,number,title,tags,image_path,width,height,points,source_url,explanation_url,source_page,curriculum_status,search_text,passage_id,instruction,response_type')
           .order('year', { ascending: false }).order('month', { ascending: false })
           .order('id', { ascending: true }).range(offset, offset + pageSize - 1)
         if (current !== version) return
@@ -68,25 +96,58 @@ export function useQuestionLibrary() {
         if (!data || data.length < pageSize) break
       }
       if (!records.every(validRecord)) throw new Error('invalid exam record')
+      const stale = Symbol('stale question library')
+      async function imageUrl(path: string) {
+        const { data, error: imageError } = await client!.storage.from('school-questions')
+          .download(path, { cacheNonce: crypto.randomUUID() }, { cache: 'no-store' })
+        if (current !== version) throw stale
+        if (imageError || !data) throw imageError ?? new Error('missing image')
+        const url = URL.createObjectURL(data)
+        allocated.push(url)
+        return url
+      }
+      const passageIds = [...new Set(records.flatMap(record => record.passage_id ? [record.passage_id] : []))]
+      const passageRecords: PassageRecord[] = []
+      for (let offset = 0; offset < passageIds.length; offset += 100) {
+        const ids = passageIds.slice(offset, offset + 100)
+        const { data, error: passageError } = await client.from('exam_passages')
+          .select('id,title,search_text,images').in('id', ids)
+        if (current !== version) throw stale
+        if (passageError || !Array.isArray(data) || data.some(passage => !ids.includes(passage.id))) throw new Error('missing common passage')
+        passageRecords.push(...data as PassageRecord[])
+      }
+      if (passageRecords.length !== passageIds.length || new Set(passageRecords.map(passage => passage.id)).size !== passageIds.length
+        || !passageRecords.every(validPassage)) throw new Error('invalid common passage')
+      const passages = new Map<string, ExamPassage>()
+      for (const passage of passageRecords) {
+        const images: ExamPassage['images'] = []
+        for (let offset = 0; offset < passage.images.length; offset += 4) {
+          const results = await Promise.allSettled(passage.images.slice(offset, offset + 4).map(async image => ({
+            imageUrl: await imageUrl(image.path), width: image.width, height: image.height, page: image.page,
+          })))
+          if (results.some(result => result.status === 'rejected')) throw new Error('common passage image failed')
+          for (const result of results) if (result.status === 'fulfilled') images.push(result.value)
+        }
+        passages.set(passage.id, { id: passage.id, title: passage.title, text: passage.search_text, images })
+      }
       const items: Question[] = []
       // Limit parallel image requests while preserving exam order.
       for (let offset = 0; offset < records.length; offset += 4) {
         const results = await Promise.allSettled(records.slice(offset, offset + 4).map(async q => {
-          const { data, error: imageError } = await client.storage.from('school-questions')
-            .download(q.image_path, { cacheNonce: crypto.randomUUID() }, { cache: 'no-store' })
-          if (current !== version) return null
-          if (imageError || !data) throw imageError ?? new Error('missing image')
-          const url = URL.createObjectURL(data)
-          allocated.push(url)
+          const url = await imageUrl(q.image_path)
+          const sharedPassage = q.passage_id ? passages.get(q.passage_id) : undefined
           return {
             id: q.id, subject: q.subject as Subject, grade: q.grade as 1 | 2,
             year: q.year, month: q.month as Question['month'], number: q.number,
-            title: q.title, tags: q.tags, prompt: q.title, passage: q.search_text ?? '', choices: [],
+            title: q.title, tags: q.tags, prompt: q.title,
+            passage: [q.search_text, q.instruction, sharedPassage?.text].filter(Boolean).join(' '), choices: [],
             answer: 0, explanation: '', kind: 'exam' as const,
             curriculum: q.curriculum_status === 'verified_2022' ? '2022' as const : 'unverified' as const,
             imageUrl: url, width: q.width, height: q.height, points: q.points,
             sourceUrl: officialLink(q.source_url), explanationUrl: officialLink(q.explanation_url),
             sourcePage: q.source_page,
+            instruction: q.instruction ?? '', responseType: q.response_type === 'short_answer' ? 'short_answer' as const : 'multiple_choice' as const,
+            sharedPassage,
           }
         }))
         if (current !== version) { release(allocated); return }

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowDown, ArrowRight, ArrowUpRight, Bookmark, BookOpen, Check, ChevronDown, ChevronRight, CircleHelp, FileUp, GraduationCap, LayoutGrid, Library, ListFilter, LogIn, Menu, Search, ShieldCheck, SlidersHorizontal, Sparkles, UserRound, X } from 'lucide-vue-next'
-import { subjects, type Question, type Subject } from './data'
+import { subjects, type ExamPassage, type ExamPassageImage, type Question, type Subject } from './data'
 import { useQuestionLibrary } from './questions'
+import LibraryQuestionCard from './components/LibraryQuestionCard.vue'
+import './library-passages.css'
 import SchoolEntrance from './components/SchoolEntrance.vue'
 import AccountDialog from './components/AccountDialog.vue'
 import AdminDialog from './components/AdminDialog.vue'
@@ -28,7 +30,8 @@ const accountMode = ref<'signin' | 'password'>('signin')
 const adminOpen = ref(false)
 const importOpen = ref(false)
 const importNotice = ref('')
-const selectedImage = ref<Question | null>(null)
+const selectedImage = ref<{ src: string; alt: string; width?: number; height?: number } | null>(null)
+const expandedPassages = ref<string[]>([])
 const importConfirm = ref(false)
 const answers = ref<string[]>([])
 const { user, authReady, authBusy, isAdmin, isSchoolMember, accessReady, recoveryMode, recoveryLinkError, authNotice, refreshSchoolAccess, signOut } = useAccount()
@@ -45,7 +48,8 @@ watch([() => user.value?.id, canEnter], ([, allowed]) => {
   else { clearQuestions(); selectedImage.value = null; adminOpen.value = false; importOpen.value = false; helpOpen.value = false; importConfirm.value = false; importNotice.value = '' }
 }, { immediate: true, flush: 'sync' })
 watch(questionItems, items => {
-  if (selectedImage.value && !items.some(q => q.imageUrl === selectedImage.value?.imageUrl)) selectedImage.value = null
+  if (selectedImage.value && !items.some(q => q.imageUrl === selectedImage.value?.src
+    || q.sharedPassage?.images.some(image => image.imageUrl === selectedImage.value?.src))) selectedImage.value = null
 }, { flush: 'sync' })
 watch(recoveryMode, active => { if (active) authOpen.value = true }, { immediate: true })
 watch(recoveryLinkError, active => { if (active) authOpen.value = true }, { immediate: true })
@@ -62,7 +66,7 @@ const matchingQuestions = computed(() => questionItems.value.filter(q =>
   (year.value === 'all' || q.year === Number(year.value)) &&
   (month.value === 'all' || q.month === Number(month.value)) &&
   (!savedOnly.value || saved.value.includes(q.id)) &&
-  (!query.value.trim() || [q.title, q.prompt, q.passage, ...q.tags].join(' ').toLowerCase().includes(query.value.trim().replace(/^#/, '').toLowerCase()))
+  (!query.value.trim() || [q.title, q.prompt, q.passage, q.instruction, q.sharedPassage?.text, q.sharedPassage?.title, ...q.tags].join(' ').toLowerCase().includes(query.value.trim().replace(/^#/, '').toLowerCase()))
 ))
 // Count each tag within the other filters, before applying the selected tag.
 const tagCounts = computed(() => {
@@ -78,6 +82,42 @@ const filtered = computed(() => matchingQuestions.value
     const date = a.year * 100 + a.month - (b.year * 100 + b.month)
     return (sort.value === 'oldest' ? date : -date) || a.grade - b.grade || a.number - b.number
   }))
+// Filtering and counts use individual questions. Expanding siblings is a viewing action.
+const resultGroups = computed(() => {
+  const groups: Array<{ key: string; passage?: ExamPassage; matched: Question[]; all: Question[]; shown: Question[] }> = []
+  const passageGroups = new Map<string, typeof groups[number]>()
+  for (const question of filtered.value) {
+    const passage = question.sharedPassage
+    if (!passage) { groups.push({ key: question.id, matched: [question], all: [question], shown: [question] }); continue }
+    let group = passageGroups.get(passage.id)
+    if (!group) {
+      const all = questionItems.value.filter(candidate => candidate.sharedPassage?.id === passage.id).sort((a, b) => a.number - b.number)
+      group = { key: passage.id, passage, matched: [], all, shown: [] }
+      passageGroups.set(passage.id, group)
+      groups.push(group)
+    }
+    group.matched.push(question)
+  }
+  for (const group of groups) {
+    if (group.passage) group.shown = expandedPassages.value.includes(group.passage.id) ? group.all : group.matched
+  }
+  return groups
+})
+watch([subject, tag, query, grade, year, month, sort, savedOnly, () => saved.value.join('|'), questionItems], () => {
+  expandedPassages.value = []
+}, { flush: 'sync' })
+function togglePassage(id: string) {
+  expandedPassages.value = expandedPassages.value.includes(id) ? expandedPassages.value.filter(value => value !== id) : [...expandedPassages.value, id]
+}
+function openQuestionImage(question: Question) {
+  if (!question.imageUrl) return
+  selectedImage.value = { src: question.imageUrl, width: question.width, height: question.height,
+    alt: `${question.year}년 고${question.grade} ${question.month}월 ${question.subject} ${question.number}번 문제 원문` }
+}
+function openPassageImage(passage: ExamPassage, image: ExamPassageImage, index: number) {
+  selectedImage.value = { src: image.imageUrl, width: image.width, height: image.height,
+    alt: `${passage.title} · 공통 지문 ${index + 1}번째 영역` }
+}
 function countText(count: number) {
   return questionsLoading.value ? '…' : questionsError.value ? '–' : count.toLocaleString('ko-KR')
 }
@@ -147,12 +187,15 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
           <p v-if="storageMessage" class="storage-message" role="status">{{ storageMessage }} <button v-if="loadFailed" @click="reloadSaved">다시 불러오기</button></p>
           <p v-if="accountError || authNotice" class="storage-message" role="alert">{{ accountError || authNotice }}</p>
           <div class="question-list" aria-live="polite">
-            <article v-for="q in filtered" :key="q.id" class="question-card">
-              <div class="question-card-header"><div class="question-origin"><span class="grade-badge">고{{ q.grade }}</span><span>{{ q.year }}년 {{ q.month }}월 · {{ q.kind === 'exam' ? '전국연합학력평가' : '예시 문항' }}</span><span class="origin-dot">·</span><span>{{ q.subject }}</span></div><button class="bookmark-button" :class="{ bookmarked: saved.includes(q.id) }" :disabled="savesDisabled || pendingSaves.includes(q.id)" :aria-busy="pendingSaves.includes(q.id)" :title="user ? '내 계정에 저장' : '이 브라우저에 저장'" :aria-label="saved.includes(q.id) ? '저장 취소: ' + q.title : '문제 저장: ' + q.title" :aria-pressed="saved.includes(q.id)" @click="toggleSaved(q.id)"><Bookmark :size="19" :fill="saved.includes(q.id) ? 'currentColor' : 'none'" /></button></div>
-              <div v-if="q.kind === 'exam'" class="question-body exam-question-body"><h3 class="exam-question-title">{{ String(q.number).padStart(2, '0') }}. {{ q.title }}</h3><button v-if="q.imageUrl" type="button" class="exam-image-button" :aria-label="`${q.number}번 문제 크게 보기`" @click="selectedImage = q"><img class="exam-question-image" :src="q.imageUrl" :width="q.width" :height="q.height" :alt="`${q.year}년 고${q.grade} ${q.month}월 ${q.subject} ${q.number}번 문제 원문`" loading="lazy" decoding="async"></button><p v-else class="storage-message">이미지를 불러오지 못했어요. <button @click="loadQuestions">다시 불러오기</button></p><p v-if="q.imageUrl" class="image-zoom-hint">문제 이미지를 누르면 크게 볼 수 있어요.</p><p class="exam-source">{{ q.points }}점 · 원본 {{ q.sourcePage }}쪽</p></div>
-              <div v-else class="question-body"><div class="question-title"><span class="question-number">{{ String(q.number).padStart(2, '0') }}</span><h3>{{ q.prompt }}</h3><span class="points">예시</span></div><div class="passage" :class="{ 'english-passage': q.subject === '영어', 'math-passage': q.subject === '수학' }">{{ q.passage }}</div><ol class="choices"><li v-for="(choice,index) in q.choices" :key="choice" :class="{ 'correct-choice': answers.includes(q.id) && index + 1 === q.answer }"><span>{{ ['①','②','③','④','⑤'][index] }}</span>{{ choice }}<Check v-if="answers.includes(q.id) && index + 1 === q.answer" :size="14" /></li></ol><div v-if="answers.includes(q.id)" :id="`answer-${q.id}`" class="answer-panel"><strong>정답 {{ ['①','②','③','④','⑤'][q.answer - 1] }}</strong><p>{{ q.explanation }}</p></div></div>
-              <div class="question-footer"><div class="question-tags"><button v-for="t in q.tags" :key="t" @click="tag = t">#{{ t }}</button></div><a v-if="q.kind === 'exam' && q.explanationUrl" class="answer-button external-explanation" :href="q.explanationUrl" target="_blank" rel="noopener noreferrer">정답·해설 EBS에서 보기 <ArrowUpRight :size="15" /></a><button v-else-if="q.kind === 'demo'" class="answer-button" :aria-expanded="answers.includes(q.id)" :aria-controls="`answer-${q.id}`" @click="toggleAnswer(q.id)">{{ answers.includes(q.id) ? '정답·해설 접기' : '정답·해설 보기' }}<ChevronDown :size="15" :class="{ rotated: answers.includes(q.id) }" /></button></div>
-            </article>
+            <div v-for="group in resultGroups" :key="group.key" class="passage-question-group">
+              <section v-if="group.passage" class="shared-passage-card" :aria-label="`공통 지문: ${group.passage.title}`">
+                <header class="shared-passage-heading"><span class="shared-passage-kicker">공통 지문 · {{ group.all.map(q => q.number).join('·') }}번</span><h3>{{ group.passage.title }}</h3><p>연결된 {{ group.all.length }}문항 중 검색 조건에 맞는 {{ group.matched.length }}문항 · 지문은 한 번 표시하고 문제는 각각 저장할 수 있어요.</p></header>
+                <div class="shared-passage-images"><button v-for="(image,index) in group.passage.images" :key="image.imageUrl" type="button" class="exam-image-button passage-image-button" :aria-label="`${group.passage.title} 공통 지문 ${index + 1}번째 영역 크게 보기`" @click="openPassageImage(group.passage, image, index)"><img class="shared-passage-image" :src="image.imageUrl" :width="image.width" :height="image.height" :alt="`${group.passage.title} 공통 지문 ${index + 1}번째 영역, 원본 PDF ${image.page}쪽`" loading="lazy" decoding="async"></button></div>
+                <p class="image-zoom-hint">공통 지문 이미지도 누르면 크게 볼 수 있어요.</p>
+              </section>
+              <button v-if="group.passage && group.all.length > group.matched.length" class="shared-passage-toggle" :aria-expanded="expandedPassages.includes(group.passage.id)" @click="togglePassage(group.passage.id)">{{ expandedPassages.includes(group.passage.id) ? `검색된 ${group.matched.length}문항만 보기` : `같은 지문의 전체 ${group.all.length}문항 보기` }}</button>
+              <LibraryQuestionCard v-for="q in group.shown" :key="q.id" :question="q" :saved="saved.includes(q.id)" :disabled="savesDisabled" :pending="pendingSaves.includes(q.id)" :answer-open="answers.includes(q.id)" :related="!group.matched.some(matched => matched.id === q.id)" @save="toggleSaved" @answer="toggleAnswer" @tag="tag = $event" @image="openQuestionImage" />
+            </div>
             <div v-if="!filtered.length && !questionsLoading && !questionsError" class="empty-state"><Search :size="30" /><h3>{{ savedOnly && savedLoading ? '저장한 문제를 불러오고 있어요' : savedOnly && loadFailed ? '저장 목록을 불러오지 못했어요' : '조건에 맞는 문제가 없어요' }}</h3><p>다른 키워드를 선택하거나 검색 조건을 줄여 보세요.<br>아직 등록되지 않은 과목은 자료를 준비하고 있어요.</p><button @click="reset">검색 조건 초기화 <ArrowRight :size="15" /></button></div>
           </div>
           <div v-if="filtered.length" class="end-of-results"><span></span><BookOpen :size="16" /><p>지금까지 {{ filtered.length }}개의 문제를 살펴봤어요</p><span></span></div>
@@ -163,7 +206,7 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
     </div>
     <AdminDialog v-if="adminOpen && isAdmin && canEnter" @close="adminOpen = false" />
     <ExamImportDialog v-if="importOpen && isAdmin && canEnter" @close="importOpen = false" @published="onExamPublished" />
-    <QuestionImageDialog v-if="selectedImage?.imageUrl && canEnter" :src="selectedImage.imageUrl" :alt="`${selectedImage.year}년 고${selectedImage.grade} ${selectedImage.month}월 ${selectedImage.subject} ${selectedImage.number}번 문제 원문`" :width="selectedImage.width" :height="selectedImage.height" @close="selectedImage = null" />
+    <QuestionImageDialog v-if="selectedImage && canEnter" :src="selectedImage.src" :alt="selectedImage.alt" :width="selectedImage.width" :height="selectedImage.height" @close="selectedImage = null" />
     <div v-if="helpOpen" class="modal-backdrop" @click.self="helpOpen = false" @keydown.esc="helpOpen = false"><section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1"><button class="modal-close icon-button" aria-label="안내 닫기" autofocus @click="helpOpen = false"><X :size="21" /></button><span class="eyebrow">ABOUT THE ARCHIVE</span><h2 id="help-title">함께 만들어 가는 문제서재</h2><p>고양외고 교직원만 이용하는 학교 서재입니다. 회원가입 후 관리자 승인을 받아야 입장할 수 있습니다. 과목과 키워드로 필요한 문항을 찾아 수업 준비에 활용하세요.</p><h3>자료 수록 기준</h3><p>2022 개정 교육과정은 2025년 고1부터 적용되어, 2026년 기준 고1·고2가 적용 대상입니다. 학년과 시행 연도, 과목별 출제 범위를 확인해 문항을 분류합니다.</p><h3>태그는 함께 다듬어요</h3><p>제가 역사 전공이다 보니 다른 과목은 AI를 통해 임의로 태그를 넣었습니다. 선생님들께서 실제로 쓰시기 좋은 태그(#)를 알려주시면 추가하도록 하겠습니다.</p><h3>저장한 문제와 계정</h3><p>문항 오른쪽의 책갈피를 누르면 문제를 저장할 수 있습니다. 내 계정에 저장되어 다른 기기에서도 이어서 볼 수 있으며, ‘저장한 문제만’으로 모아 볼 수 있습니다. 이전에 이 브라우저에 저장한 목록은 본인 계정으로 가져올 수 있습니다. 공용 컴퓨터에서는 사용 후 로그아웃해 주세요.</p><h3>계정 찾기</h3><p>이메일을 로그인 아이디로 사용하며 별도의 인증 메일은 보내지 않습니다. 아이디나 비밀번호를 잊으셨다면 제작자에게 가입할 때 사용한 이름과 기억나는 아이디 정보를 알려주세요. 관리자가 본인 확인 후 임시 비밀번호를 발급해 드립니다. 임시 비밀번호로 로그인한 뒤 상단의 ‘비밀번호 변경’에서 새 비밀번호를 정해 주세요.</p><a href="https://www.ebsi.co.kr/ebs/xip/xipa/retrieveSCVMainInfo.ebs?irecord=202609022&targetCd=D200&cookieGradeVal=high2" target="_blank" rel="noopener noreferrer">EBS 공식 자료 페이지 <ArrowUpRight :size="15" /></a><p class="rights-notice">{{ rightsNotice }}</p><button class="modal-confirm" @click="helpOpen = false">확인했어요</button></section></div>
   </div>
   <AccountDialog v-if="authOpen" :mode="accountMode" @close="authOpen = false" />

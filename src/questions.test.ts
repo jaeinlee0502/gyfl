@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  rpc: vi.fn(), from: vi.fn(), range: vi.fn(), storageFrom: vi.fn(), download: vi.fn(),
+  rpc: vi.fn(), from: vi.fn(), range: vi.fn(), passageIn: vi.fn(), storageFrom: vi.fn(), download: vi.fn(),
 }))
 vi.mock('./lib/supabase', () => ({
   supabase: { rpc: mocks.rpc, from: mocks.from, storage: { from: mocks.storageFrom } },
@@ -20,7 +20,9 @@ beforeEach(() => {
   vi.resetAllMocks()
   mocks.rpc.mockResolvedValue({ data: true, error: null })
   const builder = { select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: mocks.range }
-  mocks.from.mockReturnValue(builder)
+  const passageBuilder = { select: vi.fn().mockReturnThis(), in: mocks.passageIn }
+  mocks.from.mockImplementation(table => table === 'exam_passages' ? passageBuilder : builder)
+  mocks.passageIn.mockResolvedValue({ data: [], error: null })
   mocks.range.mockResolvedValue({ data: [exam()], error: null })
   mocks.storageFrom.mockReturnValue({ download: mocks.download })
   mocks.download.mockResolvedValue({ data: new Blob(['image'], { type: 'image/webp' }), error: null })
@@ -87,5 +89,68 @@ describe('학교 전용 문항 불러오기', () => {
     await library.loadQuestions()
     expect(library.questionItems.value[0]?.explanationUrl).toBe('')
     library.clearQuestions()
+  })
+
+  it('공통 지문 이미지는 한 번만 인증 다운로드하고 연결 문항들이 함께 참조한다', async () => {
+    const shared = {
+      id: 'shared-passage-1', title: '통계의 활용', search_text: '숫자와 언어의 한계',
+      images: [{ path: 'imports/exam/passages/passage/0.webp', width: 900, height: 1600, page: 8 }],
+    }
+    mocks.range.mockResolvedValue({ data: [
+      { ...exam(41), passage_id: shared.id, instruction: '다음 글을 읽고 답하시오.', response_type: 'multiple_choice' },
+      { ...exam(42), passage_id: shared.id, response_type: 'short_answer' },
+    ], error: null })
+    mocks.passageIn.mockResolvedValue({ data: [shared], error: null })
+    let next = 0
+    vi.mocked(URL.createObjectURL).mockImplementation(() => `blob:private-${++next}`)
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    expect(mocks.passageIn).toHaveBeenCalledWith('id', [shared.id])
+    expect(mocks.download.mock.calls.map(call => call[0])).toEqual([
+      shared.images[0]!.path, '2025/03/history/41.webp', '2025/03/history/42.webp',
+    ])
+    expect(library.questionItems.value[0]!.sharedPassage).toBe(library.questionItems.value[1]!.sharedPassage)
+    expect(library.questionItems.value[0]).toMatchObject({
+      passage: '검색할 문제 원문 다음 글을 읽고 답하시오. 숫자와 언어의 한계',
+      instruction: '다음 글을 읽고 답하시오.', responseType: 'multiple_choice',
+      sharedPassage: { title: shared.title, images: [{ imageUrl: 'blob:private-1', page: 8 }] },
+    })
+    expect(library.questionItems.value[1]!.responseType).toBe('short_answer')
+    library.clearQuestions()
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3)
+  })
+
+  it('필수 공통 지문이 없거나 잘못된 경로이면 불완전한 문제를 표시하지 않는다', async () => {
+    mocks.range.mockResolvedValue({ data: [{ ...exam(), passage_id: 'missing-passage' }], error: null })
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    expect(library.error.value).toBeTruthy()
+    expect(mocks.download).not.toHaveBeenCalled()
+    mocks.passageIn.mockResolvedValue({ data: [{ id: 'missing-passage', title: '공통 지문', search_text: '',
+      images: [{ path: '../draft.webp', width: 900, height: 1000, page: 1 }] }], error: null })
+    await library.loadQuestions()
+    expect(library.questionItems.value).toEqual([])
+    expect(mocks.download).not.toHaveBeenCalled()
+  })
+
+  it('공통 지문 일부를 불러온 뒤 로그아웃하면 할당한 URL도 회수한다', async () => {
+    mocks.range.mockResolvedValue({ data: [{ ...exam(), passage_id: 'passage-1' }], error: null })
+    mocks.passageIn.mockResolvedValue({ data: [{ id: 'passage-1', title: '두 쪽 지문', search_text: '공통 지문', images: [
+      { path: 'imports/exam/passages/passage/0.webp', width: 900, height: 1000, page: 1 },
+      { path: 'imports/exam/passages/passage/1.webp', width: 900, height: 1000, page: 2 },
+    ] }], error: null })
+    let finish!: (result: unknown) => void
+    mocks.download.mockResolvedValueOnce({ data: new Blob(['part-one']), error: null })
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const library = useQuestionLibrary()
+    const pending = library.loadQuestions()
+    await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledOnce())
+    library.clearQuestions()
+    finish({ data: new Blob(['late-part-two']), error: null })
+    await pending
+    expect(library.questionItems.value).toEqual([])
+    expect(URL.createObjectURL).toHaveBeenCalledOnce()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:private-question')
+    expect(library.error.value).toBe('')
   })
 })

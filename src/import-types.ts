@@ -10,6 +10,7 @@ export interface ExamImportMetadata {
   month: 3 | 6 | 9 | 10
   sourceUrl: string
   explanationUrl: string
+  excludedNumbers?: number[]
 }
 
 // Fractions of the displayed page, measured from its upper-left corner.
@@ -32,13 +33,28 @@ export interface ImportQuestionDraft {
   reviewed: boolean
   width?: number
   height?: number
+  passageClientId?: string
+  instruction?: string
+  responseType?: 'multiple_choice' | 'short_answer'
 }
+
+export interface ImportPassageDraft {
+  clientId: string
+  title: string
+  searchText: string
+  regions: PdfRegion[]
+  reviewed: boolean
+  imageSizes?: Array<{ width: number; height: number }>
+}
+
+export function passageImageKey(clientId: string, index: number) { return `${clientId}:${index}` }
 
 export interface ExamPdfAnalysis {
   metadata: Partial<ExamImportMetadata>
   pageCount: number
   questions: ImportQuestionDraft[]
   warnings: string[]
+  passages?: ImportPassageDraft[]
 }
 
 export interface RenderedPdfImage {
@@ -58,6 +74,7 @@ export interface ExamImportRecord {
   questions: ImportQuestionDraft[]
   created_at: string
   published_at: string | null
+  passages?: ImportPassageDraft[]
 }
 
 export function ebsExamListUrl(grade: 1 | 2) {

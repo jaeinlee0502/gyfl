@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
-import type { ExamImportMetadata, ExamImportRecord, ImportQuestionDraft, RenderedPdfImage } from './import-types'
+import { passageImageKey, type ExamImportMetadata, type ExamImportRecord, type ImportPassageDraft, type ImportQuestionDraft, type RenderedPdfImage } from './import-types'
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), storageFrom: vi.fn(), upload: vi.fn(), download: vi.fn() }))
 vi.mock('./lib/supabase', () => ({
@@ -12,6 +12,7 @@ import { useExamImports } from './exam-imports'
 const importId = '11111111-1111-4111-8111-111111111111'
 const firstId = '22222222-2222-4222-8222-222222222222'
 const secondId = '33333333-3333-4333-8333-333333333333'
+const passageId = '44444444-4444-4444-8444-444444444444'
 const metadata: ExamImportMetadata = {
   subject: '한국사', grade: 1, year: 2025, month: 3,
   sourceUrl: 'https://www.ebsi.co.kr/ebs/exam', explanationUrl: 'https://www.ebsi.co.kr/ebs/exam',
@@ -27,6 +28,17 @@ function question(clientId = firstId, number = 1): ImportQuestionDraft {
 }
 function image(): RenderedPdfImage {
   return { blob: new Blob(['image'], { type: 'image/webp' }), width: 1000, height: 1200 }
+}
+function passage(): ImportPassageDraft {
+  return { clientId: passageId, title: '공통 지문 1~2번', searchText: '두 문항에서 공유하는 지문', reviewed: true,
+    regions: [{ page: 1, left: .1, top: .1, right: .5, bottom: .8 },
+      { page: 1, left: .52, top: .1, right: .92, bottom: .4 }] }
+}
+function linkedQuestion(): ImportQuestionDraft {
+  return { ...question(), passageClientId: passageId, instruction: '다음 글을 읽고 물음에 답하시오.', responseType: 'multiple_choice' }
+}
+function passageImages() {
+  return new Map([[passageImageKey(passageId, 0), image()], [passageImageKey(passageId, 1), image()]])
 }
 function createAccount() {
   return { configured: true, authReady: ref(true), user: ref<{ id: string } | null>({ id: 'admin-one' }), isAdmin: ref(true) }
@@ -169,5 +181,110 @@ describe('관리자 PDF 업로드와 검수 자료 등록', () => {
     })) } })
     await expect(useExamImports().publishImport(importId, metadata, [question()], new Map([[firstId, image()]])))
       .rejects.toThrow('이미 등록되어 있어요')
+  })
+
+  it('공통 지문 초안과 듣기 제외 번호를 문항 연결 정보와 함께 저장한다', async () => {
+    const info = { ...metadata, subject: '영어' as const, excludedNumbers: Array.from({ length: 17 }, (_, index) => index + 1) }
+    const questions = [{ ...linkedQuestion(), number: 18, reviewed: false }]
+    const passages = [{ ...passage(), reviewed: false }]
+    await useExamImports().saveDraft(importId, info, questions, passages)
+    expect(mocks.invoke).toHaveBeenCalledWith('exam-admin', { body: {
+      action: 'save-draft', id: importId, metadata: info, questions, passages,
+    } })
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('공통 지문의 각 영역을 별도 이미지로 올린 뒤에만 등록을 요청한다', async () => {
+    const questions = [linkedQuestion(), { ...question(secondId, 2), passageClientId: passageId, responseType: 'short_answer' as const }]
+    const passages = [passage()]
+    const images = passageImages()
+    await useExamImports().publishImport(importId, metadata, questions,
+      new Map([[firstId, image()], [secondId, image()]]), passages, images)
+    expect(mocks.upload).toHaveBeenCalledTimes(4)
+    for (const index of [0, 1]) {
+      expect(mocks.upload).toHaveBeenNthCalledWith(index + 3,
+        `imports/${importId}/passages/${passageId}/${index}.webp`, images.get(passageImageKey(passageId, index))!.blob,
+        { contentType: 'image/webp', upsert: true, cacheControl: '0' })
+    }
+    const saved = mocks.invoke.mock.calls[0]![1].body
+    expect(saved.questions).toMatchObject([
+      { passageClientId: passageId, instruction: '다음 글을 읽고 물음에 답하시오.', responseType: 'multiple_choice' },
+      { passageClientId: passageId, responseType: 'short_answer' },
+    ])
+    expect(saved.passages).toMatchObject([{ clientId: passageId, reviewed: true,
+      imageSizes: [{ width: 1000, height: 1200 }, { width: 1000, height: 1200 }] }])
+    expect(passages[0]!.imageSizes).toBeUndefined()
+    expect(mocks.invoke.mock.calls.map(call => call[1].body.action)).toEqual(['save-draft', 'publish'])
+    expect(mocks.invoke.mock.invocationCallOrder[1]).toBeGreaterThan(mocks.upload.mock.invocationCallOrder[3]!)
+  })
+
+  it('지문 검수나 일부 이미지가 빠지면 서버 저장과 업로드를 시작하지 않는다', async () => {
+    const imports = useExamImports()
+    const images = new Map([[firstId, image()]])
+    await expect(imports.publishImport(importId, metadata, [linkedQuestion()], images,
+      [{ ...passage(), reviewed: false }], passageImages())).rejects.toThrow('공통 지문도')
+    await expect(imports.publishImport(importId, metadata, [linkedQuestion()], images,
+      [passage()], new Map([[passageImageKey(passageId, 0), image()]]))).rejects.toThrow('모든 영역')
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('다른 자료의 지문 참조와 연결 문항 없는 지문은 등록할 수 없다', async () => {
+    const imports = useExamImports()
+    const images = new Map([[firstId, image()]])
+    await expect(imports.publishImport(importId, metadata, [linkedQuestion()], images)).rejects.toThrow('문항 번호')
+    await expect(imports.publishImport(importId, metadata, [question()], images,
+      [passage()], passageImages())).rejects.toThrow('연결된 문항이 없는')
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('너비나 높이가 너무 작은 공통 지문 영역은 저장·업로드 전에 확인을 요청한다', async () => {
+    const tiny = passage()
+    tiny.regions = [{ page: 1, left: .1, top: .1, right: .105, bottom: .8 }]
+    await expect(useExamImports().publishImport(importId, metadata, [linkedQuestion()], new Map([[firstId, image()]]),
+      [tiny], new Map([[passageImageKey(passageId, 0), image()]]))).rejects.toThrow('공통 지문의 영역')
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('제외 번호와 남길 문항이 겹치거나 제외 범위가 잘못되면 등록하지 않는다', async () => {
+    const imports = useExamImports()
+    for (const excludedNumbers of [[1], [18, 18], [0], [101], [1.5]]) {
+      await expect(imports.publishImport(importId, { ...metadata, excludedNumbers }, [question()], new Map([[firstId, image()]])))
+        .rejects.toThrow('제외한 문항 번호')
+    }
+    expect(mocks.invoke).not.toHaveBeenCalled()
+  })
+
+  it('잘못된 응답 형식이나 지나치게 긴 공통 지시는 등록하지 않는다', async () => {
+    const imports = useExamImports()
+    await expect(imports.publishImport(importId, metadata, [{ ...question(), responseType: 'essay' as never }],
+      new Map([[firstId, image()]]))).rejects.toThrow('문항 번호')
+    await expect(imports.publishImport(importId, metadata, [{ ...question(), instruction: 'a'.repeat(2001) }],
+      new Map([[firstId, image()]]))).rejects.toThrow('문항 번호')
+    expect(mocks.invoke).not.toHaveBeenCalled()
+  })
+
+  it('지문 이미지 업로드가 실패해도 초안을 삭제하지 않고 등록 요청을 멈춘다', async () => {
+    mocks.upload.mockResolvedValueOnce({ error: null }).mockResolvedValueOnce({ error: new Error('failure') })
+    await expect(useExamImports().publishImport(importId, metadata, [linkedQuestion()], new Map([[firstId, image()]]),
+      [passage()], passageImages())).rejects.toThrow('공통 지문 이미지를 모두 업로드하지 못했어요')
+    expect(mocks.upload).toHaveBeenCalledTimes(2)
+    expect(mocks.invoke.mock.calls.map(call => call[1].body.action)).toEqual(['save-draft'])
+  })
+
+  it('지문 이미지를 올리는 중 관리자 권한이 사라지면 다음 영역과 등록을 멈춘다', async () => {
+    let finish!: (value: { error: null }) => void
+    mocks.upload.mockResolvedValueOnce({ error: null }).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const pending = useExamImports().publishImport(importId, metadata, [linkedQuestion()], new Map([[firstId, image()]]),
+      [passage()], passageImages())
+    const failure = expect(pending).rejects.toThrow('로그인 상태가 바뀌어')
+    await vi.waitFor(() => expect(mocks.upload).toHaveBeenCalledTimes(2))
+    account.isAdmin.value = false
+    finish({ error: null })
+    await failure
+    expect(mocks.upload).toHaveBeenCalledTimes(2)
+    expect(mocks.invoke.mock.calls.map(call => call[1].body.action)).toEqual(['save-draft'])
   })
 })

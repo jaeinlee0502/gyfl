@@ -1,16 +1,23 @@
 export interface ImportMetadata {
   subject?: string; grade?: number; year?: number; month?: number;
   sourceUrl?: string; explanationUrl?: string;
+  excludedNumbers?: number[];
 }
 export interface Region { page: number; left: number; top: number; right: number; bottom: number }
 export interface ImportQuestion {
   clientId: string; number: number; title: string; tags: string[]; points: number;
   searchText: string; regions: Region[]; reviewed: boolean; width?: number; height?: number;
+  passageClientId?: string; instruction?: string; responseType?: 'multiple_choice' | 'short_answer';
+}
+export interface ImportPassage {
+  clientId: string; title: string; searchText: string; regions: Region[]; reviewed: boolean;
+  imageSizes?: { width: number; height: number }[];
 }
 export interface ImportRecord {
   id: string; file_name: string; sha256: string; page_count: number; source_path: string;
   status: 'draft' | 'published'; metadata: ImportMetadata; questions: ImportQuestion[];
   created_at: string; published_at: string | null; deleting_at?: string | null;
+  passages?: ImportPassage[];
 }
 export interface ImportDependencies {
   allowedOrigins: readonly string[];
@@ -19,7 +26,7 @@ export interface ImportDependencies {
   listImports(): Promise<ImportRecord[]>;
   createImport(actorId: string, input: { fileName: string; sha256: string; pageCount: number }): Promise<ImportRecord>;
   getImport(id: string): Promise<ImportRecord | null>;
-  saveDraft(actorId: string, id: string, metadata: ImportMetadata, questions: ImportQuestion[]): Promise<ImportRecord>;
+  saveDraft(actorId: string, id: string, metadata: ImportMetadata, questions: ImportQuestion[], passages: ImportPassage[]): Promise<ImportRecord>;
   publish(actorId: string, id: string): Promise<number>;
   deleteDraft(actorId: string, id: string): Promise<void>;
 }
@@ -57,7 +64,44 @@ function metadata(value: unknown): ImportMetadata {
       result[key] = url.href;
     }
   }
+  if ('excludedNumbers' in value) {
+    if (!Array.isArray(value.excludedNumbers) || value.excludedNumbers.length > 100
+      || value.excludedNumbers.some(number => !integer(number,1,100))
+      || new Set(value.excludedNumbers).size !== value.excludedNumbers.length) invalid('INVALID_METADATA','제외할 문항 번호를 확인해 주세요.');
+    result.excludedNumbers = [...value.excludedNumbers] as number[];
+  }
   return result;
+}
+function regions(value: unknown, pageCount: number, limit: number, minimum = 0): Region[] {
+  if (!Array.isArray(value) || value.length < minimum || value.length > limit) invalid('INVALID_QUESTIONS','추출 영역 개수를 확인해 주세요.');
+  return value.map(region => {
+    if (!object(region) || !integer(region.page,1,pageCount)
+      || !['left','top','right','bottom'].every(k => typeof region[k] === 'number' && Number.isFinite(region[k]) && (region[k] as number) >= 0 && (region[k] as number) <= 1)
+      || (region.left as number) >= (region.right as number) || (region.top as number) >= (region.bottom as number)) invalid('INVALID_QUESTIONS','추출 영역이 페이지 범위를 벗어났어요.');
+    return { page: region.page, left: region.left as number, top: region.top as number, right: region.right as number, bottom: region.bottom as number };
+  });
+}
+function passages(value: unknown, pageCount: number): ImportPassage[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 100) invalid('INVALID_PASSAGES','공통 지문은 최대 100개까지 저장할 수 있어요.');
+  const ids = new Set<string>();
+  return value.map(item => {
+    if (!object(item) || typeof item.clientId !== 'string' || !uuid.test(item.clientId)
+      || typeof item.title !== 'string' || item.title.length > 200
+      || typeof item.searchText !== 'string' || item.searchText.length > 30000
+      || typeof item.reviewed !== 'boolean') invalid('INVALID_PASSAGES','공통 지문 제목·본문·검수 상태를 확인해 주세요.');
+    const clientId = item.clientId.toLowerCase();
+    if (ids.has(clientId)) invalid('INVALID_PASSAGES','공통 지문 식별자가 중복돼요.');
+    ids.add(clientId);
+    const result: ImportPassage = { clientId, title: item.title.trim(), searchText: item.searchText, reviewed: item.reviewed, regions: regions(item.regions,pageCount,12,1) };
+    if (result.regions.some(region => region.right-region.left < .01-1e-9 || region.bottom-region.top < .01-1e-9)) invalid('INVALID_PASSAGES','공통 지문 영역의 너비와 높이는 각각 페이지의 1% 이상이어야 해요.');
+    if ('imageSizes' in item) {
+      if (!Array.isArray(item.imageSizes) || item.imageSizes.length !== result.regions.length
+        || item.imageSizes.some(size => !object(size) || !integer(size.width,1,10000) || !integer(size.height,1,10000))) invalid('INVALID_PASSAGES','공통 지문 이미지 크기를 확인해 주세요.');
+      result.imageSizes = item.imageSizes.map(size => ({ width: size.width as number, height: size.height as number }));
+    }
+    return result;
+  });
 }
 function questions(value: unknown, pageCount: number): ImportQuestion[] {
   if (!Array.isArray(value) || value.length > 100) invalid('INVALID_QUESTIONS','문항은 최대 100개까지 등록할 수 있어요.');
@@ -74,13 +118,19 @@ function questions(value: unknown, pageCount: number): ImportQuestion[] {
       if (typeof tag !== 'string' || tag.trim().length < 1 || tag.trim().length > 60) invalid('INVALID_QUESTIONS','태그는 1자 이상 60자 이하로 입력해 주세요.');
       return tag.trim();
     });
-    const regions = item.regions.map(region => {
-      if (!object(region) || !integer(region.page,1,pageCount)
-        || !['left','top','right','bottom'].every(k => typeof region[k] === 'number' && Number.isFinite(region[k]) && (region[k] as number) >= 0 && (region[k] as number) <= 1)
-        || (region.left as number) >= (region.right as number) || (region.top as number) >= (region.bottom as number)) invalid('INVALID_QUESTIONS','문항 추출 영역이 페이지 범위를 벗어났어요.');
-      return { page: region.page, left: region.left as number, top: region.top as number, right: region.right as number, bottom: region.bottom as number };
-    });
-    const result: ImportQuestion = { clientId: item.clientId, number: item.number, title: item.title.trim(), tags: [...new Set(tags)], points: item.points, searchText: item.searchText, regions, reviewed: item.reviewed };
+    const result: ImportQuestion = { clientId: item.clientId.toLowerCase(), number: item.number, title: item.title.trim(), tags: [...new Set(tags)], points: item.points, searchText: item.searchText, regions: regions(item.regions,pageCount,16), reviewed: item.reviewed };
+    if ('passageClientId' in item) {
+      if (typeof item.passageClientId !== 'string' || !uuid.test(item.passageClientId)) invalid('INVALID_PASSAGES','연결할 공통 지문을 확인해 주세요.');
+      result.passageClientId = item.passageClientId.toLowerCase();
+    }
+    if ('instruction' in item) {
+      if (typeof item.instruction !== 'string' || item.instruction.length > 2000) invalid('INVALID_QUESTIONS','공통 문제 지시를 확인해 주세요.');
+      result.instruction = item.instruction.trim();
+    }
+    if ('responseType' in item) {
+      if (!['multiple_choice','short_answer'].includes(item.responseType as string)) invalid('INVALID_QUESTIONS','선택형·단답형 구분을 확인해 주세요.');
+      result.responseType = item.responseType as ImportQuestion['responseType'];
+    }
     for (const key of ['width','height'] as const) if (key in item) {
       if (!integer(item[key],1,10000)) invalid('INVALID_QUESTIONS','문항 이미지 크기를 확인해 주세요.');
       result[key] = item[key] as number;
@@ -137,7 +187,11 @@ export function createImportHandler(deps: ImportDependencies) {
       if (input.action === 'get-import') return reply(200,{import:record});
       if (input.action === 'save-draft') {
         if (record.status === 'published') throw new ImportError(409,'IMPORT_PUBLISHED','이미 등록한 자료는 검수 초안으로 수정할 수 없어요.');
-        return reply(200,{import:await deps.saveDraft(actor.id,record.id,metadata(input.metadata),questions(input.questions,record.page_count))});
+        const savedPassages = passages(input.passages,record.page_count);
+        const savedQuestions = questions(input.questions,record.page_count);
+        const passageIds = new Set(savedPassages.map(passage=>passage.clientId));
+        if (savedQuestions.some(question=>question.passageClientId && !passageIds.has(question.passageClientId))) invalid('INVALID_PASSAGES','현재 초안에 있는 공통 지문만 연결할 수 있어요.');
+        return reply(200,{import:await deps.saveDraft(actor.id,record.id,metadata(input.metadata),savedQuestions,savedPassages)});
       }
       if (input.action === 'publish') {
         const count = await deps.publish(actor.id,record.id);

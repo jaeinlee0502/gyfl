@@ -13,7 +13,7 @@ function validOrigin(value: string) {
   return parsed.origin;
 }
 const allowedOrigins = [validOrigin(site.origin),...(Deno.env.get('APP_ALLOWED_ORIGINS') || '').split(',').map(value=>value.trim()).filter(Boolean).map(validOrigin)];
-const fields = 'id,file_name,sha256,page_count,source_path,status,metadata,questions,created_at,published_at,deleting_at';
+const fields = 'id,file_name,sha256,page_count,source_path,status,metadata,questions,passages,created_at,published_at,deleting_at';
 
 function databaseError(error: { message: string }): never {
   const failures: [string,number,string][] = [
@@ -25,6 +25,7 @@ function databaseError(error: { message: string }): never {
     ['IMPORT_NOT_READY',409,'시험 정보와 문항별 검수 확인, 이미지 업로드를 모두 완료해 주세요.'],
     ['INVALID_METADATA',400,'과목·학년·시험 연월과 EBS 출처 링크를 확인해 주세요.'],
     ['INVALID_DRAFT',400,'문항 번호·태그·추출 영역·이미지 크기를 확인해 주세요.'],
+    ['INVALID_PASSAGES',400,'공통 지문 영역·문항 연결·이미지 크기를 확인해 주세요.'],
     ['STORAGE_DELETE_FAILED',502,'파일을 삭제하지 못했어요. 검수 초안 삭제를 다시 시도해 주세요.'],
   ];
   for (const [code,status,message] of failures) if (error.message.includes(code)) throw new ImportError(status,code==='NOT_ADMIN'?'ADMIN_REQUIRED':code,message);
@@ -66,9 +67,9 @@ const handler = createImportHandler({
     if (error) throw error;
     return data as ImportRecord | null;
   },
-  async saveDraft(actorId,id,metadata,questions) {
+  async saveDraft(actorId,id,metadata,questions,passages) {
     const {data,error} = await server.rpc('save_exam_import_draft',{
-      p_actor_user_id:actorId,p_import_id:id,p_metadata:metadata,p_questions:questions,
+      p_actor_user_id:actorId,p_import_id:id,p_metadata:metadata,p_questions:questions,p_passages:passages,
     });
     if (error) databaseError(error);
     return record(data);
@@ -82,9 +83,9 @@ const handler = createImportHandler({
   async deleteDraft(actorId,id) {
     const {data,error} = await server.rpc('begin_delete_exam_import',{p_actor_user_id:actorId,p_import_id:id});
     if (error) databaseError(error);
-    const prefix = `imports/${id}/questions/`;
+    const prefixes = [`imports/${id}/questions/`,`imports/${id}/passages/`];
     if (!data || data.source_path !== `imports/${id}/source.pdf` || !Array.isArray(data.image_paths)
-      || !data.image_paths.every((path: unknown)=>typeof path==='string' && path.startsWith(prefix) && path.endsWith('.webp'))) throw new Error('Unexpected import deletion scope.');
+      || !data.image_paths.every((path: unknown)=>typeof path==='string' && prefixes.some(prefix=>path.startsWith(prefix)) && path.endsWith('.webp') && !path.split('/').includes('..'))) throw new Error('Unexpected import deletion scope.');
     try {
       for (let offset=0;offset<data.image_paths.length;offset+=100) {
         const removed = await server.storage.from('school-questions').remove(data.image_paths.slice(offset,offset+100));

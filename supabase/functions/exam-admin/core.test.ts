@@ -70,7 +70,7 @@ describe('관리자 PDF 검수 등록 API',()=>{
  it('정보가 일부만 인식된 초안과 아직 검수하지 않은 문항을 저장할 수 있다',async()=>{
   const draft={...question(),tags:[' 현대사 ','현대사']};
   expect((await call({action:'save-draft',id,metadata:{subject:'한국사',sourceUrl:''},questions:[draft]})).response.status).toBe(200);
-  expect(deps.saveDraft).toHaveBeenCalledWith(actor,id,{subject:'한국사',sourceUrl:''},[{...question(),tags:['현대사']}]);
+  expect(deps.saveDraft).toHaveBeenCalledWith(actor,id,{subject:'한국사',sourceUrl:''},[{...question(),tags:['현대사']}],[]);
  });
  it('임의 외부 출처·계정 정보가 들어간 링크·잘못된 학년과 시행월은 저장하지 않는다',async()=>{
   for(const metadata of [{sourceUrl:'http://www.ebsi.co.kr/'},{sourceUrl:'https://www.ebsi.co.kr.evil.example/'},{sourceUrl:'https://user:password@www.ebsi.co.kr/'},{grade:3},{month:4},{year:2024},{subject:'admin'}]){
@@ -81,6 +81,33 @@ describe('관리자 PDF 검수 등록 API',()=>{
  it('문항 번호 중복과 페이지 밖의 추출 영역을 저장하지 않는다',async()=>{
   expect((await call({action:'save-draft',id,metadata:{},questions:[question(),{...question(),clientId:'44444444-4444-4444-8444-444444444444'}]})).response.status).toBe(400);
   for(const regions of [[{page:5,left:.1,top:.1,right:.5,bottom:.8}],[{page:1,left:.5,top:.1,right:.1,bottom:.8}],[{page:1,left:-1,top:.1,right:.5,bottom:.8}]])expect((await call({action:'save-draft',id,metadata:{},questions:[{...question(),regions}]})).response.status).toBe(400);
+  expect(deps.saveDraft).not.toHaveBeenCalled();
+ });
+ it('공통 지문과 문항 연결·단답형·공통 지시를 함께 저장한다',async()=>{
+  const passageId='44444444-4444-4444-8444-444444444444';
+  const passage={clientId:passageId,title:' 공통 지문 ',searchText:'지문 내용',reviewed:false,
+   regions:[{page:1,left:.1,top:.1,right:.5,bottom:.5}],imageSizes:[{width:800,height:900}]};
+  const linked={...question(),passageClientId:passageId,instruction:' 다음 글을 읽으시오. ',responseType:'short_answer'};
+  const result=await call({action:'save-draft',id,metadata:{subject:'영어',excludedNumbers:[1,2,3]},questions:[linked],passages:[passage]});
+  expect(result.response.status).toBe(200);
+  expect(deps.saveDraft).toHaveBeenCalledWith(actor,id,{subject:'영어',excludedNumbers:[1,2,3]},
+   [{...linked,instruction:'다음 글을 읽으시오.'}],[{...passage,title:'공통 지문'}]);
+ });
+ it('없는 지문 연결·잘못된 지문 영역·이미지 크기·중복 식별자를 저장하지 않는다',async()=>{
+  const passage={clientId:'44444444-4444-4444-8444-444444444444',title:'지문',searchText:'본문',reviewed:false,regions:[{page:1,left:.1,top:.1,right:.5,bottom:.5}]};
+  const base={action:'save-draft',id,metadata:{},questions:[{...question(),passageClientId:passage.clientId}],passages:[passage]};
+  for(const update of [{passages:[]},{passages:[passage,passage]},{passages:[{...passage,regions:[]}]},
+   {passages:[{...passage,regions:[{page:5,left:.1,top:.1,right:.5,bottom:.5}]}]},
+   {passages:[{...passage,imageSizes:[]}]},{passages:[{...passage,imageSizes:[{width:0,height:100}]}]}]) {
+   expect((await call({...base,...update})).response.status).toBe(400);
+  }
+  expect(deps.saveDraft).not.toHaveBeenCalled();
+ });
+ it('제외 문항 번호·응답 형식·공통 지시의 범위를 검증한다',async()=>{
+  for(const metadata of [{excludedNumbers:[1,1]},{excludedNumbers:[0]},{excludedNumbers:[101]},{excludedNumbers:['1']}])
+   expect((await call({action:'save-draft',id,metadata,questions:[question()]})).response.status).toBe(400);
+  for(const invalid of [{responseType:'essay'},{instruction:'가'.repeat(2001)},{passageClientId:''}])
+   expect((await call({action:'save-draft',id,metadata:{},questions:[{...question(),...invalid}]})).response.status).toBe(400);
   expect(deps.saveDraft).not.toHaveBeenCalled();
  });
  it('완료 문항 수를 반환하고 서버의 중복·미검수 오류를 유지한다',async()=>{
