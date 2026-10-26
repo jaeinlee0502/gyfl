@@ -74,6 +74,7 @@ export interface ExamImportRecord {
   questions: ImportQuestionDraft[]
   created_at: string
   published_at: string | null
+  deleting_at?: string | null
   passages?: ImportPassageDraft[]
 }
 

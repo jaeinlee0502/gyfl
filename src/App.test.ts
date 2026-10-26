@@ -49,7 +49,7 @@ let bookmarks = createBookmarks()
 vi.mock('./account', () => ({ useAccount: () => account, initializeAccount: vi.fn() }))
 vi.mock('./questions', () => ({ useQuestionLibrary: () => library }))
 vi.mock('./bookmarks', () => ({ useBookmarks: () => bookmarks }))
-vi.mock('./components/ExamImportDialog.vue', () => ({ __esModule: true, default: { name: 'ExamImportDialog', emits: ['close', 'published'], template: '<div class="test-import-dialog"></div>' } }))
+vi.mock('./components/ExamImportDialog.vue', () => ({ __esModule: true, default: { name: 'ExamImportDialog', emits: ['close', 'published', 'changed'], template: '<div class="test-import-dialog"></div>' } }))
 vi.mock('./components/QuestionImageDialog.vue', () => ({ __esModule: true, default: { name: 'QuestionImageDialog', props: ['src', 'alt', 'width', 'height'], emits: ['close'], template: '<div class="test-image-dialog"></div>' } }))
 
 beforeEach(() => {
@@ -370,4 +370,19 @@ describe('학교 서재 입장과 문제 탐색', () => {
     expect(wrapper.find('.choices').exists()).toBe(false)
     wrapper.unmount()
   })
+})
+
+it('등록 자료 삭제 뒤 서재와 저장 목록을 새로 불러온다', async () => {
+  account.isAdmin.value = true
+  const wrapper = mount(App)
+  await flushPromises()
+  const open = wrapper.findAll('button').find(b => b.text().includes('문제 등록'))!
+  await open.trigger('click')
+  await flushPromises()
+  const before = library.loadQuestions.mock.calls.length
+  wrapper.findComponent({ name: 'ExamImportDialog' }).vm.$emit('changed')
+  await flushPromises()
+  expect(library.loadQuestions).toHaveBeenCalledTimes(before + 1)
+  expect(bookmarks.reloadSaved).toHaveBeenCalledOnce()
+  wrapper.unmount()
 })

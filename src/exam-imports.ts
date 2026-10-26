@@ -96,7 +96,7 @@ function validatePublish(metadata: ExamImportMetadata, questions: ImportQuestion
     if (!uuid.test(question.clientId) || ids.has(question.clientId.toLowerCase()) || !Number.isInteger(question.number)
       || question.number < 1 || question.number > 100 || numbers.has(question.number)
       || !question.title.trim() || question.title.length > 200
-      || !Array.isArray(question.tags) || question.tags.length === 0 || question.tags.length > 20
+      || !Array.isArray(question.tags) || question.tags.length > 20
       || question.tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 60)
       || !Number.isInteger(question.points) || question.points < 1 || question.points > 10
       || typeof question.searchText !== 'string' || question.searchText.length > 30000
@@ -264,5 +264,10 @@ export function useExamImports() {
     return (await request<{ message: string }>(identity, { action: 'delete-draft', id })).message
   }
 
-  return { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, cancelPending }
+  async function deleteImport(id: string) {
+    const identity = capture(); checkId(id)
+    return (await request<{ message: string }>(identity, { action: 'delete-import', id })).message
+  }
+
+  return { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport, cancelPending }
 }

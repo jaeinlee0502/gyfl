@@ -28,7 +28,7 @@ function createApi() {
     listImports: vi.fn().mockResolvedValue([]), createImport: vi.fn().mockResolvedValue(record()),
     getImport: vi.fn().mockResolvedValue(record()), downloadPdf: vi.fn().mockResolvedValue(new Blob(['%PDF-test'], { type: 'application/pdf' })),
     saveDraft: vi.fn().mockResolvedValue(record()), publishImport: vi.fn().mockResolvedValue({ message: '등록했습니다.', count: 1 }),
-    deleteDraft: vi.fn().mockResolvedValue('초안을 삭제했어요.'), cancelPending: vi.fn(),
+    deleteDraft: vi.fn().mockResolvedValue('초안을 삭제했어요.'), deleteImport: vi.fn().mockResolvedValue('등록 자료를 삭제했어요.'), cancelPending: vi.fn(),
   }
 }
 function createPdf() {
@@ -508,8 +508,8 @@ describe('관리자 PDF 업로드와 검수', () => {
     wrapper.unmount()
   })
 
-  it('일괄 확인해도 태그가 없는 문항은 등록할 수 없다', async () => {
-    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [{ ...question(), tags: [] }], warnings: [] })
+  it('일괄 확인해도 제목이 없는 문항은 등록할 수 없다', async () => {
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [{ ...question(), title: '' }], warnings: [] })
     const wrapper = mount(ExamImportDialog)
     await choosePdf(wrapper)
     await wrapper.get('.import-review-all').trigger('click')
@@ -536,6 +536,78 @@ describe('관리자 PDF 업로드와 검수', () => {
     expect(wrapper.find('.import-title-suggestion').exists()).toBe(false)
     expect(api.saveDraft).not.toHaveBeenCalled()
     expect(api.publishImport).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('등록 조건과 등록 완료 자료 삭제', () => {
+  it('태그를 인식하지 못한 수학 30문항도 전체 확인 후 등록한다', async () => {
+    const info = { ...metadata, subject: '수학' as const }
+    const items = Array.from({ length: 30 }, (_, i) => ({ ...question(),
+      clientId: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`, number: i + 1,
+      tags: [], searchText: '수식의 값은?', responseType: i >= 21 ? 'short_answer' as const : 'multiple_choice' as const }))
+    pdf.analyze.mockResolvedValueOnce({ metadata: info, pageCount: 1, questions: items, warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, '전체 검수 확인').trigger('click')
+    expect(wrapper.get('.import-publish-bar').text()).toContain('확인 30/30문항')
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeUndefined()
+    await wrapper.get('.import-publish-bar .import-primary').trigger('click')
+    await flushPromises()
+    expect(api.publishImport.mock.calls[0]![2]).toHaveLength(30)
+    expect(api.publishImport.mock.calls[0]![2].every((q: ImportQuestionDraft) => !q.tags.length && q.reviewed)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('확인을 모두 마쳐도 잘못된 배점은 문항 번호와 수정할 내용을 알린다', async () => {
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [{ ...question(), number: 7, points: 0 }], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, '전체 검수 확인').trigger('click')
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.import-publish-bar').text()).toContain('7번: 배점은 1~10')
+    expect(wrapper.get('.import-question-card').text()).toContain('7번: 배점은 1~10')
+    wrapper.unmount()
+  })
+
+  it('등록 완료 자료 삭제는 영향 안내와 취소를 제공하고 확인한 뒤에만 실행한다', async () => {
+    const published = { ...record(), status: 'published' as const }
+    api.listImports.mockResolvedValueOnce([published]).mockResolvedValueOnce([])
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises()
+    expect(wrapper.text()).toContain('등록 완료')
+    expect(wrapper.findAll('button').some(b => b.text() === '이어서 검수')).toBe(false)
+    await button(wrapper, '등록 자료 삭제').trigger('click')
+    expect(wrapper.get('.import-confirm').text()).toContain('사용자들의 해당 문항 저장 기록')
+    expect(api.deleteImport).not.toHaveBeenCalled()
+    await wrapper.get('.import-confirm .import-secondary').trigger('click')
+    expect(wrapper.find('.import-confirm').exists()).toBe(false)
+    await button(wrapper, '등록 자료 삭제').trigger('click')
+    await button(wrapper, '등록 자료 삭제하기').trigger('click')
+    await flushPromises()
+    expect(api.deleteImport).toHaveBeenCalledExactlyOnceWith(published.id)
+    expect(api.deleteDraft).not.toHaveBeenCalled()
+    expect(wrapper.find('.import-records').exists()).toBe(false)
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('등록 자료 삭제 실패는 목록을 갱신하고 삭제 재시도를 제공한다', async () => {
+    const published = { ...record(), status: 'published' as const }
+    api.listImports.mockResolvedValueOnce([published]).mockResolvedValueOnce([{ ...published, deleting_at: '2026-10-26' }]).mockResolvedValueOnce([])
+    api.deleteImport.mockRejectedValueOnce(new Error('파일을 모두 삭제하지 못했어요. 삭제를 다시 시도해 주세요.'))
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises()
+    await button(wrapper, '등록 자료 삭제').trigger('click')
+    await button(wrapper, '등록 자료 삭제하기').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('다시 시도')
+    expect(button(wrapper, '삭제 재시도').exists()).toBe(true)
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    await button(wrapper, '등록 자료 삭제하기').trigger('click')
+    await flushPromises()
+    expect(api.deleteImport).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('.import-records').exists()).toBe(false)
     wrapper.unmount()
   })
 })

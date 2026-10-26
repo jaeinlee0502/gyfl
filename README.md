@@ -40,10 +40,11 @@ Vite 경로는 `/gyfl/`입니다. 계정 설정이 없으면 문제 탐색을 �
 - `supabase/migrations/202610250002_school_library.sql`
 - `supabase/migrations/202610250003_exam_imports.sql`
 - `supabase/migrations/202610260001_shared_passages.sql`
+- `supabase/migrations/202610260002_import_registration_and_deletion.sql`
 - `supabase/functions/account-admin/`
 - `supabase/functions/exam-admin/`
 
-두 번째 마이그레이션은 일반 계정을 자동 승인하지 않습니다. 세 번째는 관리자 전용 업로드 초안·비공개 PDF 버킷·검수 완료 등록 트랜잭션을 추가하며, 네 번째는 공통 지문·영역별 비공개 이미지·문항 연결을 같은 등록 트랜잭션으로 검증합니다. 관리자는 `account_admins`, 승인된 교직원은 `school_members`에서 서버가 확인합니다. 사용자 메타데이터나 브라우저의 표시 값으로 접근 권한을 부여하지 않습니다. 승인 변경은 서버 전용 RPC로 처리하고 별도 감사 기록을 남깁니다.
+두 번째 마이그레이션은 일반 계정을 자동 승인하지 않습니다. 세 번째는 관리자 전용 업로드 초안·비공개 PDF 버킷·검수 완료 등록 트랜잭션을 추가하며, 네 번째는 공통 지문·영역별 비공개 이미지·문항 연결을 같은 등록 트랜잭션으로 검증합니다. 다섯 번째는 태그 없는 검수 문항의 등록과 관리자 확인 후 등록 자료 삭제·재업로드를 지원합니다. 삭제는 해당 업로드의 문항·지문·저장 기록만 정리하고, 파일 정리 실패 시 재시도할 수 있습니다. 관리자는 `account_admins`, 승인된 교직원은 `school_members`에서 서버가 확인합니다. 사용자 메타데이터나 브라우저의 표시 값으로 접근 권한을 부여하지 않습니다. 승인 변경은 서버 전용 RPC로 처리하고 별도 감사 기록을 남깁니다.
 
 서버 설치·계정 운영 절차는 [계정 연결 안내](docs/auth-setup.md), 교직원 승인 절차는 [학교 서재 운영](docs/school-library.md)을 참고하세요.
 

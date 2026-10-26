@@ -80,8 +80,10 @@ const handler = createImportHandler({
     if (typeof data !== 'number' || !Number.isInteger(data) || data<1 || data>100) throw new Error('Unexpected publish count.');
     return data;
   },
-  async deleteDraft(actorId,id) {
-    const {data,error} = await server.rpc('begin_delete_exam_import',{p_actor_user_id:actorId,p_import_id:id});
+  async deleteImport(actorId,id,allowPublished) {
+    const {data,error} = await server.rpc('begin_delete_exam_import',{
+      p_actor_user_id:actorId,p_import_id:id,p_allow_published:allowPublished,
+    });
     if (error) databaseError(error);
     const prefixes = [`imports/${id}/questions/`,`imports/${id}/passages/`];
     if (!data || data.source_path !== `imports/${id}/source.pdf` || !Array.isArray(data.image_paths)
@@ -94,8 +96,8 @@ const handler = createImportHandler({
       const raw = await server.storage.from('exam-imports').remove([data.source_path]);
       if (raw.error) throw raw.error;
     } catch {
-      // The durable deletion marker keeps the draft frozen; retry is safe.
-      throw new ImportError(502,'STORAGE_DELETE_FAILED','파일을 삭제하지 못했어요. 검수 초안 삭제를 다시 시도해 주세요.');
+      // The durable deletion marker keeps the import frozen; retry is safe.
+      throw new ImportError(502,'STORAGE_DELETE_FAILED','파일을 삭제하지 못했어요. 자료 삭제를 다시 시도해 주세요.');
     }
     const finished = await server.rpc('finish_delete_exam_import',{p_actor_user_id:actorId,p_import_id:id});
     if (finished.error) databaseError(finished.error);

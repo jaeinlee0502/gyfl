@@ -8,9 +8,9 @@ import { openExamPdf } from '../pdf-import'
 import { suggestQuestionTitle } from '../question-titles'
 import { MAX_PDF_BYTES, MAX_PDF_PAGES, ebsExamListUrl, passageImageKey, type ExamImportMetadata, type ExamImportRecord, type ImportPassageDraft, type ImportQuestionDraft, type PdfRegion, type RenderedPdfImage } from '../import-types'
 
-const emit = defineEmits<{ close: []; published: [payload: { count: number; subject: Subject }] }>()
+const emit = defineEmits<{ close: []; changed: []; published: [payload: { count: number; subject: Subject }] }>()
 const { configured, user, authReady, isAdmin } = useAccount()
-const { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft } = useExamImports()
+const { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport } = useExamImports()
 const allowed = computed(() => configured && authReady.value && Boolean(user.value) && isAdmin.value)
 const dialog = ref<HTMLDialogElement | null>(null)
 const chosenFile = ref<File | null>(null)
@@ -20,6 +20,7 @@ const listLoading = ref(false)
 const listError = ref('')
 const busy = ref(false)
 const publishing = ref(false)
+const deleting = ref(false)
 const progress = ref('')
 const error = ref('')
 const notice = ref('')
@@ -85,18 +86,37 @@ const excludedNumbersText = computed(() => {
 const editingLabel = computed(() => editingKind.value === 'passage'
   ? passages.value.find(p => p.clientId === editingId.value)?.title || '공통 지문'
   : `${questions.value.find(q => q.clientId === editingId.value)?.number ?? ''}번 문항`)
+const questionIssues = computed(() => new Map(questions.value.map(q => {
+  const issues: string[] = []
+  if (!Number.isInteger(q.number) || q.number < 1 || q.number > 100) issues.push('문항 번호는 1~100 사이의 정수로 입력해 주세요.')
+  if (questions.value.some(other => other !== q && other.number === q.number)) issues.push('다른 문항과 번호가 겹쳐요.')
+  if (!q.title.trim() || q.title.length > 200) issues.push('제목은 1~200자로 입력해 주세요.')
+  if (q.tags.length > 20 || q.tags.some(tag => !tag.trim() || tag.length > 60)) issues.push('태그는 각각 1~60자, 최대 20개까지 입력해 주세요.')
+  if (!Number.isInteger(q.points) || q.points < 1 || q.points > 10) issues.push('배점은 1~10 사이의 정수로 입력해 주세요.')
+  if (q.passageClientId && !passageMap.value.has(q.passageClientId)) issues.push('연결할 공통 지문을 다시 선택해 주세요.')
+  if (q.instruction && q.instruction.length > 2000) issues.push('풀이 안내는 2,000자 이하로 입력해 주세요.')
+  if (q.searchText.length > 30000) issues.push('검색용 문제 내용은 30,000자 이하로 입력해 주세요.')
+  if (q.responseType && !['multiple_choice', 'short_answer'].includes(q.responseType)) issues.push('선택형·단답형을 확인해 주세요.')
+  if (metadata.excludedNumbers?.includes(q.number)) issues.push('제외한 문항 번호와 겹쳐요.')
+  if (!q.regions.length || q.regions.length > 16 || !q.regions.every(validRegion)) issues.push('문항 영역의 페이지와 시작·끝 위치를 확인해 주세요.')
+  if (!previews.has(q.clientId)) issues.push('영역을 지정하고 미리보기를 갱신해 주세요.')
+  return [q.clientId, issues] as const
+})))
 const questionsValid = computed(() => questions.value.length > 0 && questions.value.length <= 100
-  && new Set(questions.value.map(q => q.number)).size === questions.value.length
-  && questions.value.every(q => Number.isInteger(q.number) && q.number >= 1 && q.number <= 100 && q.title.trim().length > 0
-    && q.title.length <= 200 && q.tags.length > 0 && q.tags.length <= 20
-    && q.tags.every(tag => tag.trim().length > 0 && tag.length <= 60)
-    && Number.isInteger(q.points) && q.points >= 1 && q.points <= 10
-    && (!q.passageClientId || passageMap.value.has(q.passageClientId))
-    && (!q.instruction || q.instruction.length <= 2000)
-    && (!q.responseType || ['multiple_choice', 'short_answer'].includes(q.responseType))
-    && !metadata.excludedNumbers?.includes(q.number)
-    && q.regions.length > 0 && q.regions.every(validRegion) && previews.has(q.clientId)))
-const canPublish = computed(() => allowed.value && !busy.value && !editingId.value && Boolean(activeRecord.value && completeMetadata.value)
+  && [...questionIssues.value.values()].every(issues => !issues.length))
+const publishHint = computed(() => {
+  if (editingId.value) return '영역 수정을 적용하거나 취소한 뒤 저장·등록해 주세요.'
+  if (!completeMetadata.value) return '시험 정보와 EBS 링크를 모두 확인해 주세요.'
+  if (!passagesValid.value) return '공통 지문의 제목·영역·연결 문항을 확인해 주세요. 연결하지 않은 지문은 삭제하거나 문항에 연결해 주세요.'
+  if (reviewedPassageCount.value !== passages.value.length) return '공통 지문 전체와 이어지는 순서 확인을 마쳐 주세요.'
+  if (!questions.value.length) return '등록할 문항을 추가해 주세요.'
+  const invalid = questions.value.find(q => questionIssues.value.get(q.clientId)?.length)
+  if (invalid) return `${invalid.number}번: ${questionIssues.value.get(invalid.clientId)![0]}`
+  if (reviewedCount.value !== questions.value.length) return '모든 문항의 이미지와 태그 확인을 마치면 등록할 수 있어요.'
+  return '확인한 문항을 학교 서재에 등록할 수 있어요. 태그는 선택 사항이에요.'
+})
+const canPublish = computed(() => allowed.value && !busy.value && !editingId.value && activeRecord.value?.status === 'draft'
+  && !activeRecord.value.deleting_at && Boolean(completeMetadata.value)
   && questionsValid.value && passagesValid.value && reviewedCount.value === questions.value.length && reviewedPassageCount.value === passages.value.length)
 const editedRegion = computed(() => editingRegions.value[editingIndex.value])
 const regionStyle = computed(() => {
@@ -110,7 +130,7 @@ function validRegion(region: PdfRegion) {
   return Number.isInteger(region.page) && region.page >= 1 && region.page <= (document.value?.pageCount ?? MAX_PDF_PAGES)
     && [region.left, region.top, region.right, region.bottom].every(Number.isFinite)
     && region.left >= 0 && region.top >= 0 && region.right <= 1 && region.bottom <= 1
-    && region.right - region.left >= .01 && region.bottom - region.top >= .01
+    && region.right - region.left + 1e-9 >= .01 && region.bottom - region.top + 1e-9 >= .01
 }
 function clearPagePreview() {
   ++pageVersion
@@ -131,7 +151,7 @@ function destroyDocument() {
   if (old) void Promise.resolve(old.destroy()).catch(() => {})
 }
 function closeNow() {
-  if (publishing.value) return
+  if (publishing.value || deleting.value) return
   alive = false
   ++version
   ++listVersion
@@ -140,7 +160,7 @@ function closeNow() {
   emit('close')
 }
 function requestClose() {
-  if (publishing.value) return
+  if (publishing.value || deleting.value) return
   if (dirty.value && !busy.value) {
     confirmClose.value = true
     void nextTick(() => dialog.value?.querySelector<HTMLButtonElement>('[aria-labelledby="import-close-title"] button')?.focus())
@@ -375,7 +395,7 @@ async function beginUpload() {
   finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
 }
 async function resume(record: ExamImportRecord) {
-  if (!allowed.value || busy.value || dirty.value || record.status !== 'draft') return
+  if (!allowed.value || busy.value || dirty.value || record.status !== 'draft' || record.deleting_at) return
   const ticket = ++version
   busy.value = true
   resetEditor()
@@ -383,7 +403,7 @@ async function resume(record: ExamImportRecord) {
     progress.value = '저장한 원본 PDF와 초안을 불러오고 있어요…'
     const latest = await getImport(record.id)
     if (!current(ticket)) return
-    if (latest.status !== 'draft') throw new Error('이미 등록된 자료예요. 목록을 새로 불러와 주세요.')
+    if (latest.status !== 'draft' || latest.deleting_at) throw new Error('이미 등록되었거나 삭제 중인 자료예요. 목록을 새로 불러와 주세요.')
     const blob = await downloadPdf(latest)
     if (!current(ticket)) return
     const pdf = await openExamPdf(new File([blob], latest.file_name, { type: 'application/pdf' }))
@@ -442,19 +462,25 @@ async function publish() {
   finally { if (current(ticket)) { publishing.value = false; busy.value = false; progress.value = '' } }
 }
 async function removeDraft() {
-  if (!allowed.value || busy.value || !deleteTarget.value) return
+  if (!allowed.value || busy.value || dirty.value || !deleteTarget.value) return
   const ticket = version
   const target = deleteTarget.value
-  busy.value = true; error.value = ''; progress.value = '미등록 초안을 삭제하고 있어요…'
+  busy.value = true; deleting.value = true; error.value = ''; progress.value = '자료와 연결된 파일을 삭제하고 있어요…'
   try {
-    const message = await deleteDraft(target.id)
+    const message = await (target.status === 'published' ? deleteImport(target.id) : deleteDraft(target.id))
     if (!current(ticket)) return
     if (activeRecord.value?.id === target.id) resetEditor()
     deleteTarget.value = null
     notice.value = message
     await loadRecords()
-  } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
-  finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
+  } catch (cause) {
+    if (current(ticket)) { error.value = friendly(cause); await loadRecords() }
+  } finally {
+    if (current(ticket)) {
+      busy.value = false; deleting.value = false; progress.value = ''
+      if (target.status === 'published') emit('changed')
+    }
+  }
 }
 function setTags(question: ImportQuestionDraft, event: Event) {
   const value = (event.target as HTMLInputElement).value
@@ -620,7 +646,7 @@ async function applyRegions() {
   finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
 }
 function readableDate(value: string) { return new Date(value).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' }) }
-watch(allowed, value => { if (!value) { publishing.value = false; closeNow() } })
+watch(allowed, value => { if (!value) { publishing.value = false; deleting.value = false; closeNow() } })
 onMounted(() => { dialog.value?.showModal(); if (allowed.value) void loadRecords() })
 onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews(); destroyDocument(); if (dialog.value?.open) dialog.value.close() })
 </script>
@@ -629,7 +655,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
   <dialog ref="dialog" class="exam-import-dialog" aria-labelledby="exam-import-title" @cancel.prevent="requestClose">
     <header class="import-dialog-heading">
       <div><span class="account-eyebrow">SCHOOL EXAM LIBRARY</span><h2 id="exam-import-title">PDF 문제 등록</h2><p>문제지를 올리고 시험 정보·공통 지문·문항·태그를 확인한 뒤 등록하세요.</p></div>
-      <button class="import-icon-button" aria-label="문제 등록 창 닫기" :disabled="publishing" @click="requestClose"><X :size="24" /></button>
+      <button class="import-icon-button" aria-label="문제 등록 창 닫기" :disabled="publishing || deleting" @click="requestClose"><X :size="24" /></button>
     </header>
     <div v-if="!allowed" class="import-message is-error" role="alert">관리자만 PDF 문제를 등록할 수 있어요.</div>
     <div v-else class="import-dialog-content">
@@ -642,11 +668,11 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
       </section>
       <p v-if="progress" class="import-message" role="status">{{ progress }}</p><p v-if="error" class="import-message is-error" role="alert">{{ error }}</p><p v-if="notice" class="import-message is-success" role="status">{{ notice }}</p>
       <section v-if="confirmClose" class="import-confirm" aria-labelledby="import-close-title"><h3 id="import-close-title">저장하지 않은 수정 내용이 있어요</h3><p>창을 닫으면 마지막으로 저장한 초안에서 다시 시작합니다.</p><div class="import-actions"><button class="import-secondary" @click="confirmClose = false">계속 검수하기</button><button class="import-danger" @click="closeNow">저장하지 않고 닫기</button></div></section>
-      <section v-if="deleteTarget" class="import-confirm" aria-labelledby="import-delete-title"><h3 id="import-delete-title">이 미등록 초안을 삭제할까요?</h3><p>{{ deleteTarget.file_name }}의 원본 PDF와 초안을 삭제합니다.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="deleteTarget = null">취소</button><button class="import-danger" :disabled="busy" @click="removeDraft">초안 삭제하기</button></div></section>
+      <section v-if="deleteTarget" class="import-confirm" aria-labelledby="import-delete-title"><h3 id="import-delete-title">{{ deleteTarget.status === 'published' ? '등록 완료된 자료를 삭제할까요?' : '이 미등록 초안을 삭제할까요?' }}</h3><p><strong>{{ deleteTarget.file_name }}</strong>의 원본 PDF와 초안을 삭제합니다.</p><p v-if="deleteTarget.status === 'published'">이 파일로 등록한 모든 문항·공통 지문·이미지와 사용자들의 해당 문항 저장 기록도 함께 삭제되며 되돌릴 수 없어요. 삭제 후 수정한 PDF를 다시 올려 등록할 수 있어요.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="deleteTarget = null">취소</button><button class="import-danger" :disabled="busy" @click="removeDraft">{{ deleteTarget.status === 'published' ? '등록 자료 삭제하기' : '초안 삭제하기' }}</button></div></section>
       <details class="import-draft-list" :open="!activeRecord">
-        <summary>저장된 업로드 · {{ records.length }}개</summary><div class="import-list-heading"><p>미등록 초안은 이어서 검수할 수 있어요.</p><button class="import-secondary" :disabled="busy || listLoading" @click="loadRecords"><RefreshCw :size="17" /> 목록 새로고침</button></div>
+        <summary>저장된 업로드 · {{ records.length }}개</summary><div class="import-list-heading"><p>미등록 초안은 이어서 검수할 수 있어요. 등록 완료된 자료를 고치려면 삭제 후 수정한 PDF를 다시 올려 주세요.</p><button class="import-secondary" :disabled="busy || listLoading" @click="loadRecords"><RefreshCw :size="17" /> 목록 새로고침</button></div>
         <p v-if="listLoading" role="status">목록을 불러오고 있어요…</p><p v-if="listError" class="import-message is-error" role="alert">{{ listError }}</p>
-        <ul v-if="records.length" class="import-records"><li v-for="record in records" :key="record.id"><div><strong>{{ record.file_name }}</strong><span>{{ readableDate(record.created_at) }} · {{ record.page_count }}쪽 · {{ record.status === 'published' ? '등록 완료' : '검수 초안' }}</span></div><div v-if="record.status === 'draft'" class="import-actions"><button class="import-secondary" :disabled="busy || dirty" @click="resume(record)">이어서 검수</button><button class="import-text-danger" :disabled="busy || dirty" @click="deleteTarget = record"><Trash2 :size="17" /> 초안 삭제</button></div></li></ul><p v-else-if="!listLoading" class="import-small">저장된 업로드가 아직 없어요.</p>
+        <ul v-if="records.length" class="import-records"><li v-for="record in records" :key="record.id"><div><strong>{{ record.file_name }}</strong><span>{{ readableDate(record.created_at) }} · {{ record.page_count }}쪽 · {{ record.deleting_at ? '삭제 중 · 삭제 재시도 필요' : record.status === 'published' ? '등록 완료' : '검수 초안' }}</span></div><div class="import-actions"><button v-if="record.status === 'draft' && !record.deleting_at" class="import-secondary" :disabled="busy || dirty" @click="resume(record)">이어서 검수</button><button class="import-text-danger" :disabled="busy || dirty" @click="deleteTarget = record"><Trash2 :size="17" /> {{ record.deleting_at ? '삭제 재시도' : record.status === 'published' ? '등록 자료 삭제' : '초안 삭제' }}</button></div></li></ul><p v-else-if="!listLoading" class="import-small">저장된 업로드가 아직 없어요.</p>
       </details>
       <template v-if="activeRecord && document">
         <section class="import-metadata" aria-labelledby="import-metadata-title">
@@ -678,7 +704,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
         </section>
         <section class="import-question-review" aria-labelledby="import-review-title">
           <div class="import-section-heading"><div><h3 id="import-review-title">4. 문항·태그 검수</h3><p>확인 {{ reviewedCount }}/{{ questions.length }}문항 · 문항별 그림·보기·선택지와 공통 지문 연결을 확인해 주세요.</p></div><div class="import-actions"><button class="import-secondary" :disabled="busy || !questions.length" @click="recommendAllTitles">제목 일괄 추천</button><button class="import-secondary" :disabled="busy || questions.length >= 100" @click="addQuestion"><Plus :size="18" /> 문항 직접 추가</button></div></div>
-          <p class="import-small">추천 태그는 문제 내용의 키워드로 제안한 초안입니다. 추가·수정한 뒤 문항별 확인을 눌러 주세요. 단답형 문항은 선택지가 없어도 정상입니다.</p>
+          <p class="import-small">추천 태그는 문제 내용의 키워드로 제안한 초안입니다. 추가·수정한 뒤 문항별 확인을 눌러 주세요. 태그는 선택 사항이며 비워 두어도 등록할 수 있어요. 단답형 문항은 선택지가 없어도 정상입니다.</p>
           <p class="import-small">제목은 문제의 개념·주제·출제 내용을 짧게 요약해 추천합니다. 직접 쓴 제목은 자동으로 바꾸지 않으며, 추천 내용을 확인한 뒤 적용할 수 있어요.</p>
           <section v-if="titleCandidates" class="import-title-bulk" aria-labelledby="import-title-bulk-heading">
             <h4 id="import-title-bulk-heading">추천 제목 확인</h4><p class="import-small">깨진 문자가 있거나 빈 제목만 먼저 선택했어요. 바꿀 제목을 직접 선택해 주세요. 적용하면 변경한 문항의 검수 확인이 해제됩니다.</p>
@@ -703,10 +729,11 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
             <img v-if="previews.get(question.clientId)" class="import-question-preview" :src="previews.get(question.clientId)!.url" :alt="`${question.number}번 문항 검수 이미지`"><p v-else class="import-small">문항 영역을 지정하고 미리보기를 갱신해 주세요.</p>
             <div class="import-question-toolbar"><button class="import-secondary" :disabled="busy" @click="editRegions(question)"><Scissors :size="17" /> 영역 조정</button><button class="import-text-danger" :disabled="busy" @click="removeQuestion(question)"><Trash2 :size="17" /> 문항 제외</button></div>
             <label class="import-tags-field">풀이 안내 <span class="import-small">여러 번호가 공유하는 풀이 지시가 있으면 여기에 적어 주세요.</span><textarea v-model="question.instruction" class="import-instruction-field" rows="2" maxlength="2000" :disabled="busy" @input="markChanged(question)"></textarea></label>
-            <label class="import-tags-field">태그<input :value="question.tags.join(', ')" maxlength="800" placeholder="예: 현대사, 정치사, 6·25 전쟁" :disabled="busy" @change="setTags(question, $event)"></label>
+            <label class="import-tags-field">태그 (선택)<input :value="question.tags.join(', ')" maxlength="800" placeholder="예: 현대사, 정치사, 6·25 전쟁" :disabled="busy" @change="setTags(question, $event)"></label>
             <div v-if="selectedSubject" class="import-suggested-tags"><button v-for="tag in selectedSubject.tags" :key="tag" :class="{ selected: question.tags.includes(tag) }" :aria-pressed="question.tags.includes(tag)" :disabled="busy" @click="toggleTag(question, tag)">#{{ tag }}</button></div>
             <details class="import-search-text"><summary>검색용 문제 내용 수정</summary><label><span class="sr-only">{{ question.number }}번 검색용 문제 내용</span><textarea v-model="question.searchText" rows="4" maxlength="30000" :disabled="busy" @input="markChanged(question)"></textarea></label></details>
             <label class="import-reviewed"><input v-model="question.reviewed" type="checkbox" :disabled="busy || !previews.has(question.clientId)" @change="dirty = true"><span><Check :size="19" /> {{ question.number }}번 이미지·태그·공통 지문 연결을 확인했어요</span></label>
+            <p v-for="issue in questionIssues.get(question.clientId)" :key="issue" class="import-message is-error">{{ question.number }}번: {{ issue }}</p>
           </article>
         </section>
         <section v-if="editingId" ref="editorElement" class="import-region-editor" :aria-label="`${editingLabel} 영역 조정`">
@@ -718,7 +745,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
           <div v-if="pagePreview" class="import-page-selector" @pointerdown="startSelection" @pointermove="moveSelection" @pointerup="endSelection" @pointercancel="dragStart = null"><img :src="pagePreview.url" :alt="`${pagePreview.page}쪽 원본 페이지, 드래그하여 영역 선택`" draggable="false"><span class="import-crop-overlay" :style="regionStyle"></span></div><p v-else class="import-small" role="status">원본 페이지를 준비하고 있어요…</p>
           <div class="import-actions"><button class="import-secondary" :disabled="busy" @click="finishRegionEdit">영역 수정 취소</button><button class="import-primary" :disabled="busy" @click="applyRegions">영역 적용·미리보기 갱신</button></div>
         </section>
-        <footer class="import-publish-bar"><div><strong>확인 {{ reviewedCount }}/{{ questions.length }}문항 · 공통 지문 {{ reviewedPassageCount }}/{{ passages.length }}개</strong><p>{{ editingId ? '영역 수정을 적용하거나 취소한 뒤 저장·등록해 주세요.' : !completeMetadata ? '시험 정보와 EBS 링크를 모두 확인해 주세요.' : !passagesValid ? '공통 지문의 제목·영역·연결 문항을 확인해 주세요. 연결하지 않은 지문은 삭제하거나 문항에 연결해 주세요.' : reviewedPassageCount !== passages.length ? '공통 지문 전체와 이어지는 순서 확인을 마쳐 주세요.' : !questionsValid ? '문항 번호·제목·태그·영역·지문 연결을 확인해 주세요.' : reviewedCount !== questions.length ? '모든 문항의 이미지와 태그 확인을 마치면 등록할 수 있어요.' : '확인한 문항을 학교 서재에 등록할 수 있어요.' }}</p></div><div class="import-actions"><button type="button" class="import-secondary import-review-all" :disabled="!canToggleReview" :aria-pressed="allReviewed" @click="toggleAllReviewed"><Check :size="18" /> {{ allReviewed ? '전체 확인 해제' : '전체 검수 확인' }}</button><button class="import-secondary" :disabled="busy || !!editingId" @click="save"><Save :size="18" /> 초안 저장</button><button class="import-primary" :disabled="!canPublish" @click="publish">{{ publishing ? '등록 중…' : '확인한 문제 등록' }}</button></div></footer>
+        <footer class="import-publish-bar"><div><strong>확인 {{ reviewedCount }}/{{ questions.length }}문항 · 공통 지문 {{ reviewedPassageCount }}/{{ passages.length }}개</strong><p>{{ publishHint }}</p></div><div class="import-actions"><button type="button" class="import-secondary import-review-all" :disabled="!canToggleReview" :aria-pressed="allReviewed" @click="toggleAllReviewed"><Check :size="18" /> {{ allReviewed ? '전체 확인 해제' : '전체 검수 확인' }}</button><button class="import-secondary" :disabled="busy || !!editingId" @click="save"><Save :size="18" /> 초안 저장</button><button class="import-primary" :disabled="!canPublish" @click="publish">{{ publishing ? '등록 중…' : '확인한 문제 등록' }}</button></div></footer>
       </template>
     </div>
   </dialog>

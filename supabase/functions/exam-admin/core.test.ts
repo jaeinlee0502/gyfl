@@ -8,7 +8,7 @@ const record: ImportRecord={id,file_name:'문제지.pdf',sha256:'a'.repeat(64),p
 const question=()=>({clientId,number:1,title:'검수 문항',tags:['현대사'],points:3,searchText:'원문',regions:[{page:1,left:.1,top:.1,right:.5,bottom:.8}],reviewed:false});
 let deps: ImportDependencies;
 beforeEach(()=>{
- deps={allowedOrigins:['https://jaeinlee0502.github.io'],verifyUser:vi.fn().mockResolvedValue({id:actor}),isAdmin:vi.fn().mockResolvedValue(true),listImports:vi.fn().mockResolvedValue([record]),createImport:vi.fn().mockResolvedValue(record),getImport:vi.fn().mockResolvedValue(record),saveDraft:vi.fn().mockResolvedValue(record),publish:vi.fn().mockResolvedValue(1),deleteDraft:vi.fn().mockResolvedValue(undefined)};
+ deps={allowedOrigins:['https://jaeinlee0502.github.io'],verifyUser:vi.fn().mockResolvedValue({id:actor}),isAdmin:vi.fn().mockResolvedValue(true),listImports:vi.fn().mockResolvedValue([record]),createImport:vi.fn().mockResolvedValue(record),getImport:vi.fn().mockResolvedValue(record),saveDraft:vi.fn().mockResolvedValue(record),publish:vi.fn().mockResolvedValue(1),deleteImport:vi.fn().mockResolvedValue(undefined)};
 });
 async function call(body: unknown,options: {method?:string;token?:string|null;origin?:string;contentType?:string;raw?:string;length?:string}={}) {
  const headers=new Headers({'authorization':'Bearer '+(options.token??'valid'),'content-type':options.contentType??'application/json'});
@@ -121,12 +121,23 @@ describe('관리자 PDF 검수 등록 API',()=>{
   vi.mocked(deps.getImport).mockResolvedValue({...record,status:'published'});
   expect((await call({action:'save-draft',id,metadata:{},questions:[]})).response.status).toBe(409);
   expect((await call({action:'delete-draft',id})).response.status).toBe(409);
-  expect(deps.saveDraft).not.toHaveBeenCalled();expect(deps.deleteDraft).not.toHaveBeenCalled();
+  expect(deps.saveDraft).not.toHaveBeenCalled();expect(deps.deleteImport).not.toHaveBeenCalled();
+ });
+ it('등록 완료 자료도 관리자 전용 삭제 요청으로 삭제하고 기존 초안 삭제 요청은 구분한다',async()=>{
+  vi.mocked(deps.getImport).mockResolvedValue({...record,status:'published'});
+  expect((await call({action:'delete-import',id})).response.status).toBe(200);
+  expect(deps.deleteImport).toHaveBeenCalledExactlyOnceWith(actor,id,true);
+  vi.mocked(deps.isAdmin).mockResolvedValueOnce(false);
+  expect((await call({action:'delete-import',id})).response.status).toBe(403);
+  expect(deps.deleteImport).toHaveBeenCalledTimes(1);
+  vi.mocked(deps.getImport).mockResolvedValue(record);
+  expect((await call({action:'delete-draft',id})).response.status).toBe(200);
+  expect(deps.deleteImport).toHaveBeenLastCalledWith(actor,id,false);
  });
  it('파일 삭제가 실패한 초안의 재시도를 허용하고 서버 내부 오류는 노출하지 않는다',async()=>{
   vi.mocked(deps.getImport).mockResolvedValue({...record,deleting_at:'2026-10-25'});
   expect((await call({action:'delete-draft',id})).response.status).toBe(200);
-  vi.mocked(deps.deleteDraft).mockRejectedValueOnce(new ImportError(502,'STORAGE_DELETE_FAILED','삭제 재시도'));
+  vi.mocked(deps.deleteImport).mockRejectedValueOnce(new ImportError(502,'STORAGE_DELETE_FAILED','삭제 재시도'));
   expect((await call({action:'delete-draft',id})).data.code).toBe('STORAGE_DELETE_FAILED');
   vi.mocked(deps.listImports).mockRejectedValueOnce(new Error('private server details'));
   const result=await call({action:'list-imports'});expect(result.response.status).toBe(503);expect(JSON.stringify(result.data)).not.toContain('private server details');

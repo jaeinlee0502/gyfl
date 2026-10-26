@@ -88,6 +88,7 @@ beforeAll(async () => {
   for (const name of [
     '202610250001_accounts_and_bookmarks.sql', '202610250002_school_library.sql',
     '202610250003_exam_imports.sql', '202610260001_shared_passages.sql',
+    '202610260002_import_registration_and_deletion.sql',
   ]) await db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'));
 }, 20000);
 
@@ -286,4 +287,62 @@ describe('공통 지문의 PostgreSQL 검수·권한·등록', () => {
     expect((await db.query('select id from public.exam_imports where id=$1', [importId])).rows).toEqual([]);
     expect((await db.query('select name from storage.objects')).rows).toEqual([{ name: outside }]);
   });
+  it('태그를 추천하지 못한 수학도 검수와 이미지를 확인한 뒤 등록한다', async () => {
+    const { passageClientId, ...math } = question();
+    await setDraft([{ ...math, tags: [] }], [], { ...metadata, subject: '수학' });
+    expect((await publish()).rows).toEqual([{ count: 1 }]);
+    expect((await db.query('select subject,tags from public.exam_questions where import_id=$1', [importId])).rows)
+      .toEqual([{ subject: '수학', tags: [] }]);
+  });
+
+  it('등록 자료 삭제는 해당 문항·지문·저장 기록만 제거하고 실패한 파일 삭제를 재시도한다', async () => {
+    await publish();
+    await db.exec('reset role');
+    const outside = `imports/${otherId}/questions/${questionId}.webp`;
+    const publishedQuestionId = `import-${importId}-${questionId}`;
+    await db.query("insert into storage.objects(bucket_id,name) values('school-questions',$1)", [outside]);
+    await db.query('insert into public.bookmarks(user_id,question_id) values($1,$2),($1,$3)', [member, publishedQuestionId, 'unrelated-question']);
+    await asUser('', 'service_role');
+    // Legacy draft deletion must not remove an import published by another admin.
+    await expect(db.query('select public.begin_delete_exam_import($1,$2)', [admin, importId])).rejects.toThrow(/IMPORT_PUBLISHED/);
+    await expect(db.query('select public.begin_delete_exam_import($1,$2,true)', [member, importId])).rejects.toThrow(/NOT_ADMIN/);
+    const { rows } = await db.query<{ paths: { source_path: string; image_paths: string[] } }>(
+      'select public.begin_delete_exam_import($1,$2,true) as paths', [admin, importId]);
+    const paths = rows[0]!.paths;
+    expect(paths.image_paths.sort()).toEqual([imagePath, imagePath2, passagePath, passagePath2].sort());
+    expect((await db.query('select id from public.exam_questions where import_id=$1', [importId])).rows).toEqual([]);
+    expect((await db.query('select id from public.exam_passages where import_id=$1', [importId])).rows).toEqual([]);
+    expect((await db.query('select question_id from public.bookmarks')).rows).toEqual([{ question_id: 'unrelated-question' }]);
+    expect((await db.query('select deleting_at is not null as deleting from public.exam_imports where id=$1', [importId])).rows).toEqual([{ deleting: true }]);
+    await expect(publish()).rejects.toThrow(/IMPORT_DELETING/);
+    await expect(db.query('select public.finish_delete_exam_import($1,$2)', [admin, importId])).rejects.toThrow(/STORAGE_DELETE_FAILED/);
+    // A partial Storage deletion does not discard the import or remaining paths.
+    await db.query('delete from storage.objects where name=$1', [imagePath]);
+    const retry = await db.query<{ paths: { image_paths: string[] } }>(
+      'select public.begin_delete_exam_import($1,$2,true) as paths', [admin, importId]);
+    expect(retry.rows[0]!.paths.image_paths.sort()).toEqual([imagePath2, passagePath, passagePath2].sort());
+    await db.query('delete from storage.objects where name=any($1::text[])', [[sourcePath, ...retry.rows[0]!.paths.image_paths]]);
+    await db.query('select public.finish_delete_exam_import($1,$2)', [admin, importId]);
+    expect((await db.query('select id from public.exam_imports where id=$1', [importId])).rows).toEqual([]);
+    expect((await db.query('select name from storage.objects')).rows).toEqual([{ name: outside }]);
+    // Reusing the same exam numbers in a new upload is now possible.
+    await db.exec('reset role');
+    await db.query(`insert into public.exam_imports(id,created_by,file_name,sha256,page_count,source_path)
+      values($1,$2,'수정본.pdf',$3,2,$4)`, [importId, admin, 'b'.repeat(64), sourcePath]);
+    await setDraft();
+    for (const path of [sourcePath, imagePath, passagePath, passagePath2]) {
+      await db.query('insert into storage.objects(bucket_id,name,metadata) values($1,$2,$3::jsonb)',
+        [path === sourcePath ? 'exam-imports' : 'school-questions', path, JSON.stringify({ mimetype: path === sourcePath ? 'application/pdf' : 'image/webp' })]);
+    }
+    expect((await publish()).rows).toEqual([{ count: 1 }]);
+  });
+
+  it('브라우저 계정은 등록 자료 삭제 RPC를 직접 호출하지 못한다', async () => {
+    for (const id of [pending, member, admin]) {
+      await asUser(id);
+      await expect(db.query('select public.begin_delete_exam_import($1,$2,true)', [admin, importId])).rejects.toThrow(/permission denied/);
+      await expect(db.query('select public.finish_delete_exam_import($1,$2)', [admin, importId])).rejects.toThrow(/permission denied/);
+    }
+  });
+
 });

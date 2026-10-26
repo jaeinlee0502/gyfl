@@ -51,7 +51,7 @@ beforeEach(() => {
   mocks.invoke.mockImplementation(async (_name: string, { body }: { body: { action: string } }) => ({
     data: body.action === 'list-imports' ? { imports: [record] }
       : body.action === 'publish' ? { message: '등록했어요.', count: 2 }
-        : body.action === 'delete-draft' ? { message: '등록했어요.' } : { import: record },
+        : ['delete-draft', 'delete-import'].includes(body.action) ? { message: '등록했어요.' } : { import: record },
     error: null,
   }))
   mocks.storageFrom.mockReturnValue({ upload: mocks.upload, download: mocks.download })
@@ -287,4 +287,13 @@ describe('관리자 PDF 업로드와 검수 자료 등록', () => {
     expect(mocks.upload).toHaveBeenCalledTimes(2)
     expect(mocks.invoke.mock.calls.map(call => call[1].body.action)).toEqual(['save-draft'])
   })
+})
+
+it('태그 없는 수학 문항도 이미지 업로드 후 등록하고 등록 완료 삭제는 별도 작업으로 요청한다', async () => {
+  const imports = useExamImports()
+  await imports.publishImport(importId, { ...metadata, subject: '수학' }, [{ ...question(), tags: [] }], new Map([[firstId, image()]]))
+  expect(mocks.upload).toHaveBeenCalledOnce()
+  expect(mocks.invoke.mock.calls.at(-1)![1].body.action).toBe('publish')
+  expect(await imports.deleteImport(importId)).toBe('등록했어요.')
+  expect(mocks.invoke.mock.calls.at(-1)![1].body).toEqual({ action: 'delete-import', id: importId })
 })

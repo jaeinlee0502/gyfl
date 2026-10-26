@@ -137,6 +137,11 @@ function onExamPublished(result: { count: number; subject: Subject }) {
   importNotice.value = `${result.count}개 문항을 등록했어요.`
   void loadQuestions()
 }
+function onExamImportsChanged() {
+  if (!canEnter.value) return
+  void loadQuestions()
+  void reloadSaved()
+}
 function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ? answers.value.filter(v => v !== id) : [...answers.value, id] }
 </script>
 
@@ -205,7 +210,7 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
       </main>
     </div>
     <AdminDialog v-if="adminOpen && isAdmin && canEnter" @close="adminOpen = false" />
-    <ExamImportDialog v-if="importOpen && isAdmin && canEnter" @close="importOpen = false" @published="onExamPublished" />
+    <ExamImportDialog v-if="importOpen && isAdmin && canEnter" @close="importOpen = false" @published="onExamPublished" @changed="onExamImportsChanged" />
     <QuestionImageDialog v-if="selectedImage && canEnter" :src="selectedImage.src" :alt="selectedImage.alt" :width="selectedImage.width" :height="selectedImage.height" @close="selectedImage = null" />
     <div v-if="helpOpen" class="modal-backdrop" @click.self="helpOpen = false" @keydown.esc="helpOpen = false"><section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1"><button class="modal-close icon-button" aria-label="안내 닫기" autofocus @click="helpOpen = false"><X :size="21" /></button><span class="eyebrow">ABOUT THE ARCHIVE</span><h2 id="help-title">함께 만들어 가는 문제서재</h2><p>고양외고 교직원만 이용하는 학교 서재입니다. 회원가입 후 관리자 승인을 받아야 입장할 수 있습니다. 과목과 키워드로 필요한 문항을 찾아 수업 준비에 활용하세요.</p><h3>자료 수록 기준</h3><p>2022 개정 교육과정은 2025년 고1부터 적용되어, 2026년 기준 고1·고2가 적용 대상입니다. 학년과 시행 연도, 과목별 출제 범위를 확인해 문항을 분류합니다.</p><h3>태그는 함께 다듬어요</h3><p>제가 역사 전공이다 보니 다른 과목은 AI를 통해 임의로 태그를 넣었습니다. 선생님들께서 실제로 쓰시기 좋은 태그(#)를 알려주시면 추가하도록 하겠습니다.</p><h3>저장한 문제와 계정</h3><p>문항 오른쪽의 책갈피를 누르면 문제를 저장할 수 있습니다. 내 계정에 저장되어 다른 기기에서도 이어서 볼 수 있으며, ‘저장한 문제만’으로 모아 볼 수 있습니다. 이전에 이 브라우저에 저장한 목록은 본인 계정으로 가져올 수 있습니다. 공용 컴퓨터에서는 사용 후 로그아웃해 주세요.</p><h3>계정 찾기</h3><p>이메일을 로그인 아이디로 사용하며 별도의 인증 메일은 보내지 않습니다. 아이디나 비밀번호를 잊으셨다면 제작자에게 가입할 때 사용한 이름과 기억나는 아이디 정보를 알려주세요. 관리자가 본인 확인 후 임시 비밀번호를 발급해 드립니다. 임시 비밀번호로 로그인한 뒤 상단의 ‘비밀번호 변경’에서 새 비밀번호를 정해 주세요.</p><a href="https://www.ebsi.co.kr/ebs/xip/xipa/retrieveSCVMainInfo.ebs?irecord=202609022&targetCd=D200&cookieGradeVal=high2" target="_blank" rel="noopener noreferrer">EBS 공식 자료 페이지 <ArrowUpRight :size="15" /></a><p class="rights-notice">{{ rightsNotice }}</p><button class="modal-confirm" @click="helpOpen = false">확인했어요</button></section></div>
   </div>

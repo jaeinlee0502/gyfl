@@ -101,7 +101,7 @@ export function validatePdfRegions(regions: PdfRegion[], pageCount: number) {
     if (!Number.isInteger(r.page) || r.page < 1 || r.page > pageCount
       || ![r.left, r.top, r.right, r.bottom].every(Number.isFinite)
       || r.left < 0 || r.top < 0 || r.right > 1 || r.bottom > 1
-      || r.right - r.left < .01 || r.bottom - r.top < .01) throw new Error('문항 영역이 페이지 범위를 벗어났어요. 선택 영역을 다시 확인해 주세요.')
+      || r.right - r.left + 1e-9 < .01 || r.bottom - r.top + 1e-9 < .01) throw new Error('문항 영역이 페이지 범위를 벗어났어요. 선택 영역을 다시 확인해 주세요.')
   }
 }
 

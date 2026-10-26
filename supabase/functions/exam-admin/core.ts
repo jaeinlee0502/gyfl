@@ -28,7 +28,7 @@ export interface ImportDependencies {
   getImport(id: string): Promise<ImportRecord | null>;
   saveDraft(actorId: string, id: string, metadata: ImportMetadata, questions: ImportQuestion[], passages: ImportPassage[]): Promise<ImportRecord>;
   publish(actorId: string, id: string): Promise<number>;
-  deleteDraft(actorId: string, id: string): Promise<void>;
+  deleteImport(actorId: string, id: string, allowPublished: boolean): Promise<void>;
 }
 export class ImportError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -197,10 +197,13 @@ export function createImportHandler(deps: ImportDependencies) {
         const count = await deps.publish(actor.id,record.id);
         return reply(200,{message:`${count}문항을 학교 서재에 등록했습니다.`,count});
       }
-      if (input.action === 'delete-draft') {
-        if (record.status === 'published') throw new ImportError(409,'IMPORT_PUBLISHED','등록이 끝난 자료는 이 화면에서 삭제할 수 없어요.');
-        await deps.deleteDraft(actor.id,record.id);
-        return reply(200,{message:'검수 초안과 업로드한 파일을 삭제했습니다.'});
+      if (input.action === 'delete-draft' || input.action === 'delete-import') {
+        const allowPublished = input.action === 'delete-import';
+        if (!allowPublished && record.status === 'published') throw new ImportError(409,'IMPORT_PUBLISHED','이미 등록된 자료예요. 목록을 새로 불러온 뒤 등록 자료 삭제를 이용해 주세요.');
+        await deps.deleteImport(actor.id,record.id,allowPublished);
+        return reply(200,{message:record.status === 'published'
+          ? '등록 자료와 연결된 문항·지문·저장 기록을 삭제했어요. 수정한 PDF를 다시 올릴 수 있어요.'
+          : '검수 초안과 업로드한 파일을 삭제했습니다.'});
       }
       invalid('INVALID_ACTION','지원하지 않는 작업입니다.');
     } catch (error) {
