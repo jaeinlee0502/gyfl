@@ -65,13 +65,13 @@ beforeEach(() => {
 })
 
 describe('학교 서재 입장과 문제 탐색', () => {
-  it('한국사 추천 키워드는 지정한 9개만 표시하고 다른 태그는 문항에서 검색할 수 있다', async () => {
+  it('한국사 추천 키워드는 지정한 10개만 표시하고 다른 태그는 문항에서 검색할 수 있다', async () => {
     const wrapper = mount(App)
     await flushPromises()
     library.questionItems.value = [...records, exam('joseon', 4, '조선의 제도', ['근세', '조선 후기'])]
     await flushPromises()
     expect(wrapper.findAll('.tags .tag-label').map(label => label.text().replace(/^#\s*/, '')))
-      .toEqual(['선사·고대', '중세', '근대', '일제강점기', '현대사', '정치사', '경제사', '사회사', '문화사'])
+      .toEqual(['선사·고대', '중세', '근세', '근대', '일제강점기', '현대사', '정치사', '경제사', '사회사', '문화사'])
     await wrapper.findAll('.question-tags button').find(button => button.text() === '#근세')!.trigger('click')
     expect(wrapper.findAll('.question-card')).toHaveLength(1)
     expect(wrapper.get('.exam-question-title').text()).toContain('조선의 제도')

@@ -76,7 +76,7 @@ function tagsForSubject(name: Subject) {
   return [...new Set([...(subjects.find(s => s.name === name)?.tags ?? []),
     ...questionItems.value.filter(q => q.subject === name).flatMap(q => q.tags)])]
 }
-const historyRecommendedTags = ['선사·고대', '중세', '근대', '일제강점기', '현대사', '정치사', '경제사', '사회사', '문화사']
+const historyRecommendedTags = ['선사·고대', '중세', '근세', '근대', '일제강점기', '현대사', '정치사', '경제사', '사회사', '문화사']
 const availableTags = computed(() => subject.value === '한국사' ? historyRecommendedTags : tagsForSubject(subject.value))
 function onTagsSaved() { selectedTagQuestion.value = null; importNotice.value = '태그를 저장했어요. 모든 선생님이 같은 태그로 문제를 찾을 수 있어요.' }
 const matchingQuestions = computed(() => questionItems.value.filter(q =>
