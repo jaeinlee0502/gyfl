@@ -147,6 +147,37 @@ function pageContentTop(page: PdfTextPage) {
   return headers.length ? Math.min(.16, Math.max(...headers.map(run => run.bottom)) + .015) : .065
 }
 
+/** Recognize repeated, centered page counters before trimming rendered content. */
+export function pageFooterBounds(pages: PdfTextPage[]): Map<number, number> {
+  const counters = pages.flatMap(page => {
+    const numbers = page.runs.filter(run => /^\d{1,3}$/.test(compact(run.text))
+      && run.top >= .90 && run.top <= .97 && run.bottom - run.top < .02
+      && run.right - run.left < .04)
+    return numbers.filter(run => run.left >= .44 && run.left < .50).flatMap(current =>
+      numbers.filter(total => total.left >= .50 && total.left <= .56
+        && Math.abs(total.top - current.top) < .012
+        && total.left - current.right >= .01 && total.left - current.right <= .075
+        && Number(compact(current.text)) >= 1
+        && Number(compact(current.text)) <= Number(compact(total.text))
+        && Number(compact(total.text)) <= 100)
+        .map(total => ({ page: page.page, current, total, count: Number(compact(total.text)) })))
+  })
+  const bounds = new Map<number, number>()
+  for (const counter of counters) {
+    // Papers may be excerpts of a combined booklet, so printed page numbers
+    // need not equal PDF page indices. Require the same footer on another page.
+    const repeated = counters.some(other => other.page !== counter.page && other.count === counter.count
+      && Math.abs(other.current.left - counter.current.left) < .012
+      && Math.abs(other.total.left - counter.total.left) < .012
+      && Math.abs(other.current.top - counter.current.top) < .008)
+    if (!repeated) continue
+    // Include the small box/diagonal immediately above the printed numbers.
+    const bottom = Math.min(counter.current.top, counter.total.top) - .006
+    bounds.set(counter.page, Math.min(bounds.get(counter.page) ?? 1, bottom))
+  }
+  return bounds
+}
+
 /** Infer a listening exclusion only from an explicit instruction in this PDF. */
 function listeningNumbers(pages: PdfTextPage[], subject: Subject | undefined, warnings: string[]) {
   if (subject !== '영어') return []
@@ -171,6 +202,7 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
   const warnings = ['자동 추출한 문항 영역과 태그는 초안입니다. 등록 전에 문제·보기·선택지가 모두 보이는지 확인해 주세요.']
   if (!metadata.subject || !metadata.grade || !metadata.year || !metadata.month) warnings.push('머리말에서 일부 시험 정보를 확인하지 못했어요. 과목·학년·연월을 직접 확인해 주세요.')
   const boundary = columnBoundary(pages)
+  const footerBounds = pageFooterBounds(pages)
   const lines = pages.flatMap(page => ([0, 1] as const).flatMap(column => columnLines(page, column, boundary)))
   const candidates: Anchor[] = []
   // A PDF may store the number and its period in separate text items.
@@ -237,7 +269,8 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
       const page = pages.find(page => page.page === pageNumber)
       if (!page) continue
       const top = slot === startSlot ? Math.max(.01, start.y - .008) : pageContentTop(page)
-      const bottom = slot === endSlot ? Math.min(.913, end.y - .010) : .913
+      const contentBottom = Math.min(.913, footerBounds.get(pageNumber) ?? 1)
+      const bottom = slot === endSlot ? Math.min(contentBottom, end.y - .010) : contentBottom
       if (bottom - top >= .01) regions.push({ page: pageNumber, ...bounds(column), top, bottom })
     }
     return regions
@@ -283,7 +316,8 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
     const page = pages.find(p => p.page === anchor.page)!
     const next = anchors.find(a => a.page === anchor.page && a.column === anchor.column && a.y > anchor.y + .005)
     const nextMarker = markers.find(marker => marker.page === anchor.page && marker.column === anchor.column && marker.y > anchor.y + .005)
-    let bottom = Math.min(next ? next.y - .008 : .913, nextMarker ? nextMarker.y - .010 : .913)
+    let bottom = Math.min(next ? next.y - .008 : .913, nextMarker ? nextMarker.y - .010 : .913,
+      footerBounds.get(anchor.page) ?? 1)
     const footer = page.runs.find(run => run.top > anchor.y + .03 && run.top < bottom
       && (anchor.column === 0 ? run.left < boundary : run.left >= boundary) && /확인\s*사항|답안지의\s*해당란|이\s*문제지에\s*관한/.test(run.text))
     if (footer) bottom = footer.top - .012
@@ -374,6 +408,7 @@ export async function openExamPdf(file: File): Promise<ExamPdfDocument> {
   }
   let destroyed = false
   let textPages: PdfTextPage[] | null = null
+  let footerBounds: Map<number, number> | null = null
   function ensureOpen() { if (destroyed) throw new Error('PDF 검수가 종료되었어요. 파일을 다시 선택해 주세요.') }
   async function readText() {
     ensureOpen()
@@ -446,10 +481,17 @@ export async function openExamPdf(file: File): Promise<ExamPdfDocument> {
     },
     async renderQuestion(regions) {
       validatePdfRegions(regions, document.numPages)
+      footerBounds ??= pageFooterBounds(await readText())
       const tiles: HTMLCanvasElement[] = []
       const output = window.document.createElement('canvas')
       try {
-        for (const region of regions) tiles.push(trimBlankRows(await renderRegion(region, 2)))
+        for (const region of regions) {
+          // Apply to saved drafts too, without replacing hand-edited regions,
+          // titles or tags. Full-page previews retain the original footer.
+          const bottom = Math.min(region.bottom, footerBounds.get(region.page) ?? 1)
+          const content = bottom - region.top >= .01 ? { ...region, bottom } : region
+          tiles.push(trimBlankRows(await renderRegion(content, 2)))
+        }
         const width = Math.max(...tiles.map(tile => tile.width))
         const heights = tiles.map(tile => Math.ceil(tile.height * width / tile.width))
         const height = heights.reduce((sum, h) => sum + h, 0) + 16 * (tiles.length - 1)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzePdfText, inferExamMetadata, suggestQuestionTags, verticalContentBounds, type PdfTextPage, type PdfTextRun } from './pdf-import'
+import { analyzePdfText, inferExamMetadata, pageFooterBounds, suggestQuestionTags, verticalContentBounds, type PdfTextPage, type PdfTextRun } from './pdf-import'
 
 const run = (text: string, left: number, top: number, right = left + .36): PdfTextRun => ({ text, left, top, right, bottom: top + .012 })
 const header = (subject: string) => [run('2025학년도 3월 고1 전국연합학력평가', .1, .035), run(`${subject} 영역`, .4, .1)]
@@ -243,5 +243,55 @@ describe('문항 이미지의 바깥 빈 여백', () => {
     const pixels = white(10, 100)
     pixels.fill(0, 0, 4)
     expect(verticalContentBounds(pixels, 10, 100)).toEqual({ top: 0, bottom: 100 })
+  })
+})
+
+describe('문제 영역과 페이지 번호 테두리의 분리', () => {
+  const counter = (page: number, top = .911) => [
+    run(String(page), .474, top, .482), run('12', .512, top + .004, .528),
+  ]
+
+  it('오른쪽 단 마지막 수학 문제 아래의 페이지 번호 테두리를 영역에서 제외한다', () => {
+    const pages: PdfTextPage[] = [
+      { page: 1, runs: [...header('수학'), item(1, .1, .2), item(2, .512, .15), ...counter(1)] },
+      { page: 2, runs: [item(3, .1, .2), item(4, .512, .15, '두 행렬의 성분을 구하시오.'),
+        run('① 4 ② 7 ③ 10 ④ 13 ⑤ 16', .525, .25), ...counter(2)] },
+    ]
+    const analysis = analyzePdfText(pages)
+    const last = analysis.questions.at(-1)!
+    expect(last.regions[0]!.bottom).toBeCloseTo(.905)
+    expect(last.searchText).toContain('⑤ 16')
+    expect(last.regions[0]!.bottom).toBeGreaterThan(.262)
+    expect(pageFooterBounds(pages).size).toBe(2)
+  })
+
+  it('책자 일부만 올려도 반복되는 인쇄 쪽번호를 인식하고 본문 끝은 보존한다', () => {
+    const pages: PdfTextPage[] = [
+      { page: 1, runs: [...header('수학'), item(1, .1, .2), ...counter(3)] },
+      { page: 2, runs: [item(2, .1, .2), run('본문 맨 아래의 수식과 도형 이름', .12, .89), ...counter(4)] },
+    ]
+    const last = analyzePdfText(pages).questions.at(-1)!
+    expect(last.regions[0]!.bottom).toBeCloseTo(.905)
+    expect(last.searchText).toContain('본문 맨 아래의 수식과 도형 이름')
+  })
+
+  it('공통 지문의 단·쪽 마지막 영역에서도 같은 번호 테두리를 제외한다', () => {
+    const pages: PdfTextPage[] = [
+      { page: 1, runs: [...header('국어'), run('[1~2] 다음 글을 읽고 물음에 답하시오.', .1, .16),
+        run('지문 앞부분', .12, .3), run('오른쪽 단의 지문 뒷부분', .53, .89), ...counter(1)] },
+      { page: 2, runs: [item(1, .1, .2), item(2, .512, .2), ...counter(2)] },
+    ]
+    const passage = analyzePdfText(pages).passages![0]!
+    expect(passage.regions.slice(0, 2).every(region => Math.abs(region.bottom - .905) < 1e-9)).toBe(true)
+    expect(passage.searchText).toContain('지문 뒷부분')
+  })
+
+  it('본문의 숫자나 반복되지 않는 하단 숫자만으로 영역을 줄이지 않는다', () => {
+    const pages: PdfTextPage[] = [
+      { page: 1, runs: [...header('수학'), item(1, .1, .2), ...counter(1)] },
+      { page: 2, runs: [item(2, .1, .2), ...counter(2, .85), run('12', .512, .915, .528)] },
+    ]
+    expect(pageFooterBounds(pages).size).toBe(0)
+    expect(analyzePdfText(pages).questions[0]!.regions[0]!.bottom).toBe(.913)
   })
 })
