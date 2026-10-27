@@ -60,6 +60,18 @@ beforeEach(() => {
 })
 
 describe('관리자 PDF 업로드와 검수 자료 등록', () => {
+  it('제목·태그 추천은 검색용 태그와 요청 문항 식별자를 확인하고 결과를 반환한다', async () => {
+    const imports = useExamImports()
+    const items = [{ clientId: firstId, number: 1, text: '1987년 민주 항쟁', passageText: '', instruction: '', tags: [] }]
+    const suggestion = { clientId: firstId, title: '민주화 운동과 직선제 개헌', tags: ['현대사', '정치사'], reviewNote: '1987년 자료' }
+    mocks.invoke.mockResolvedValueOnce({ data: { suggestions: [suggestion] }, error: null })
+    expect(await imports.suggestMetadata(importId, '한국사', items)).toEqual([suggestion])
+    expect(mocks.invoke).toHaveBeenCalledWith('exam-admin', { body: { action: 'suggest-metadata', id: importId, subject: '한국사', questions: items, explanationText: '' } })
+    for (const invalid of [[{ ...suggestion, tags: ['지리'] }], [{ ...suggestion, clientId: secondId }], []]) {
+      mocks.invoke.mockResolvedValueOnce({ data: { suggestions: invalid }, error: null })
+      await expect(imports.suggestMetadata(importId, '한국사', items)).rejects.toThrow('문항에 맞는 제목')
+    }
+  })
   it('AI 제목 요청은 관리자 API에 본문과 선택 해설만 전달하고 한도 오류를 안내한다', async () => {
     const imports = useExamImports()
     const items = [{ clientId: firstId, number: 1, text: '본문', passageText: '공통 지문', instruction: '', tags: [] }]

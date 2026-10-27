@@ -25,6 +25,12 @@ function createAccount() {
 }
 function createApi() {
   return {
+    suggestMetadata: vi.fn().mockImplementation(async (_id, _subject, items) => {
+      const analysis = await pdf.analyze.mock.results.at(-1)?.value as ExamPdfAnalysis | undefined
+      return items.map((item: { clientId: string }) => ({ clientId: item.clientId,
+        title: analysis?.questions.find(q => q.clientId === item.clientId)?.title ?? question().title,
+        tags: [...(analysis?.questions.find(q => q.clientId === item.clientId)?.tags ?? question().tags)], reviewNote: '' }))
+    }),
     listImports: vi.fn().mockResolvedValue([]), createImport: vi.fn().mockResolvedValue(record()),
     getImport: vi.fn().mockResolvedValue(record()), downloadPdf: vi.fn().mockResolvedValue(new Blob(['%PDF-test'], { type: 'application/pdf' })),
     saveDraft: vi.fn().mockResolvedValue(record()), publishImport: vi.fn().mockResolvedValue({ message: '등록했습니다.', count: 1 }),
@@ -752,6 +758,84 @@ describe('원본 다시 분석', () => {
     expect(wrapper.get('[role="alert"]').text()).toContain('PDF 재분석 실패')
     expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', question().title)
     expect(before).toHaveBeenCalledTimes(revoked)
+    expect(api.saveDraft).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('PDF 업로드의 AI 제목·태그 기본값', () => {
+  const suggested = () => ({ clientId: question().clientId, title: '민주화 운동과 대통령 직선제 개헌', tags: ['현대사', '정치사'], reviewNote: '1987년 6월 민주 항쟁 자료를 근거로 분류했어요.' })
+
+  it('업로드 직후 AI 제목과 태그를 적용하고 미검수 상태로 저장·등록할 수 있다', async () => {
+    api.suggestMetadata.mockResolvedValueOnce([suggested()])
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    expect(api.suggestMetadata).toHaveBeenCalledOnce()
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', suggested().title)
+    expect(wrapper.get('.import-tags-field input').element).toHaveProperty('value', '현대사, 정치사')
+    expect(wrapper.get('.import-ai-review-note').text()).toContain('1987년')
+    expect(wrapper.get('.import-reviewed input').element).toHaveProperty('checked', false)
+    await button(wrapper, '초안 저장').trigger('click'); await flushPromises()
+    expect(api.saveDraft).toHaveBeenCalledWith(record().id, metadata, [expect.objectContaining({
+      title: suggested().title, tags: suggested().tags, aiReviewNote: suggested().reviewNote, reviewed: false,
+    })], [])
+    await wrapper.get('.import-reviewed input').setValue(true)
+    await wrapper.get('.import-publish-bar .import-primary').trigger('click'); await flushPromises()
+    expect(api.publishImport).toHaveBeenCalledWith(record().id, metadata, [expect.objectContaining({ tags: ['현대사', '정치사'] })], expect.any(Map), [], expect.any(Map))
+    wrapper.unmount()
+  })
+
+  it('AI 한도 오류가 나면 완료한 묶음은 유지하고 미완료 문항에는 규칙 시대 태그를 넣지 않는다', async () => {
+    const items = Array.from({ length: 6 }, (_, i) => ({ ...question(), number: i + 1,
+      clientId: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`, tags: ['근세'] }))
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: items, warnings: [] })
+    api.suggestMetadata.mockImplementationOnce(async (_id, _subject, batch) => batch.map((q: { clientId: string }) => ({ ...suggested(), clientId: q.clientId })))
+      .mockRejectedValueOnce(new Error('AI 요청 한도에 도달했어요.'))
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    expect(api.suggestMetadata.mock.calls.map(call => call[2].length)).toEqual([5, 1])
+    expect(wrapper.findAll('.import-tags-field input').at(-1)!.element).toHaveProperty('value', '')
+    expect(wrapper.text()).toContain('5/6문항까지 완료')
+    expect(wrapper.findAll('.import-ai-review-note').at(-1)!.text()).toContain('AI 분류 미완료')
+    expect(wrapper.findAll('.import-question-title-field input')[0]!.element).toHaveProperty('value', suggested().title)
+    wrapper.unmount()
+  })
+
+  it('기존 초안은 자동 호출 없이 유지하고 제목이 같아도 태그만 바꿀 수 있다', async () => {
+    const saved = record(); saved.questions[0]!.reviewed = true
+    api.listImports.mockResolvedValueOnce([saved]); api.getImport.mockResolvedValueOnce(saved)
+    api.suggestMetadata.mockResolvedValueOnce([{ ...suggested(), title: saved.questions[0]!.title }])
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises(); await button(wrapper, '이어서 검수').trigger('click'); await flushPromises()
+    expect(api.suggestMetadata).not.toHaveBeenCalled()
+    await wrapper.get('.import-question-card').findAll('button').find(b => b.text() === '이 문항 AI 제목·태그 추천')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.import-tags-field input').element).toHaveProperty('value', '선사·고대')
+    expect(wrapper.get('.import-reviewed input').element).toHaveProperty('checked', true)
+    await button(wrapper, '추천 제목·태그 적용').trigger('click')
+    expect(wrapper.get('.import-tags-field input').element).toHaveProperty('value', '현대사, 정치사')
+    expect(wrapper.get('.import-reviewed input').element).toHaveProperty('checked', false)
+    wrapper.unmount()
+  })
+
+  it('과목이 없으면 추측하지 않고 선택 후 다시 추천하도록 안내한다', async () => {
+    pdf.analyze.mockResolvedValueOnce({ metadata: { grade: 1 }, pageCount: 1, questions: [question()], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    expect(api.suggestMetadata).not.toHaveBeenCalled()
+    expect(wrapper.get('.import-tags-field input').element).toHaveProperty('value', '')
+    expect(wrapper.get('.import-ai-review-note').text()).toContain('과목을 확인')
+    wrapper.unmount()
+  })
+
+  it('자동 분류를 기다리다 권한이 사라지면 늦게 온 결과를 적용하거나 저장하지 않는다', async () => {
+    let finish!: (items: ReturnType<typeof suggested>[]) => void
+    api.suggestMetadata.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    account.isAdmin.value = false; await flushPromises()
+    finish([suggested()]); await flushPromises()
+    expect(wrapper.emitted('close')).toHaveLength(1)
     expect(api.saveDraft).not.toHaveBeenCalled()
     wrapper.unmount()
   })

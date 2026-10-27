@@ -31,6 +31,7 @@ export interface ImportQuestionDraft {
   searchText: string
   regions: PdfRegion[]
   reviewed: boolean
+  aiReviewNote?: string
   width?: number
   height?: number
   passageClientId?: string
@@ -72,6 +73,7 @@ export interface AiTitleQuestion {
   tags: string[]
 }
 export interface AiTitleSuggestion { clientId: string; title: string }
+export interface AiMetadataSuggestion extends AiTitleSuggestion { tags: string[]; reviewNote: string }
 
 export interface ExamImportRecord {
   id: string

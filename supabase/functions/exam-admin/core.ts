@@ -1,4 +1,4 @@
-import type { TitleRequest, TitleSuggestion } from './ai-titles.ts';
+import type { TitleRequest, TitleSuggestion, MetadataSuggestion } from './ai-titles.ts';
 
 export interface ImportMetadata {
   subject?: string; grade?: number; year?: number; month?: number;
@@ -10,6 +10,7 @@ export interface ImportQuestion {
   clientId: string; number: number; title: string; tags: string[]; points: number;
   searchText: string; regions: Region[]; reviewed: boolean; width?: number; height?: number;
   passageClientId?: string; instruction?: string; responseType?: 'multiple_choice' | 'short_answer';
+  aiReviewNote?: string;
 }
 export interface ImportPassage {
   clientId: string; title: string; searchText: string; regions: Region[]; reviewed: boolean;
@@ -32,6 +33,7 @@ export interface ImportDependencies {
   publish(actorId: string, id: string): Promise<number>;
   deleteImport(actorId: string, id: string, allowPublished: boolean): Promise<void>;
   suggestTitles(input: TitleRequest): Promise<TitleSuggestion[]>;
+  suggestMetadata(input: TitleRequest): Promise<MetadataSuggestion[]>;
 }
 export class ImportError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -122,6 +124,10 @@ function questions(value: unknown, pageCount: number): ImportQuestion[] {
       return tag.trim();
     });
     const result: ImportQuestion = { clientId: item.clientId.toLowerCase(), number: item.number, title: item.title.trim(), tags: [...new Set(tags)], points: item.points, searchText: item.searchText, regions: regions(item.regions,pageCount,16), reviewed: item.reviewed };
+    if ('aiReviewNote' in item) {
+      if (typeof item.aiReviewNote !== 'string' || item.aiReviewNote.length > 600) invalid('INVALID_QUESTIONS','AI 분류 검수 안내를 확인해 주세요.');
+      result.aiReviewNote = item.aiReviewNote;
+    }
     if ('passageClientId' in item) {
       if (typeof item.passageClientId !== 'string' || !uuid.test(item.passageClientId)) invalid('INVALID_PASSAGES','연결할 공통 지문을 확인해 주세요.');
       result.passageClientId = item.passageClientId.toLowerCase();
@@ -188,7 +194,7 @@ export function createImportHandler(deps: ImportDependencies) {
       const record = await deps.getImport(input.id);
       if (!record) throw new ImportError(404,'IMPORT_NOT_FOUND','등록 자료를 찾지 못했어요.');
       if (input.action === 'get-import') return reply(200,{import:record});
-      if (input.action === 'suggest-titles') {
+      if (input.action === 'suggest-titles' || input.action === 'suggest-metadata') {
         if (record.status !== 'draft') throw new ImportError(409,'IMPORT_PUBLISHED','미등록 초안에서 제목을 추천할 수 있어요.');
         if (record.deleting_at) throw new ImportError(409,'IMPORT_DELETING','삭제 중인 자료예요.');
         if (typeof input.subject !== 'string' || !subjects.includes(input.subject)
@@ -205,7 +211,9 @@ export function createImportHandler(deps: ImportDependencies) {
           return { clientId: item.clientId, number: item.number, text: item.text, passageText: item.passageText,
             instruction: item.instruction, tags: item.tags as string[] };
         }) };
-        return reply(200,{titles:await deps.suggestTitles(titles)});
+        return input.action === 'suggest-metadata'
+          ? reply(200,{suggestions:await deps.suggestMetadata(titles)})
+          : reply(200,{titles:await deps.suggestTitles(titles)});
       }
       if (input.action === 'save-draft') {
         if (record.status === 'published') throw new ImportError(409,'IMPORT_PUBLISHED','이미 등록한 자료는 검수 초안으로 수정할 수 없어요.');

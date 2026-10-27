@@ -8,7 +8,7 @@ const record: ImportRecord={id,file_name:'문제지.pdf',sha256:'a'.repeat(64),p
 const question=()=>({clientId,number:1,title:'검수 문항',tags:['현대사'],points:3,searchText:'원문',regions:[{page:1,left:.1,top:.1,right:.5,bottom:.8}],reviewed:false});
 let deps: ImportDependencies;
 beforeEach(()=>{
- deps={allowedOrigins:['https://jaeinlee0502.github.io'],verifyUser:vi.fn().mockResolvedValue({id:actor}),isAdmin:vi.fn().mockResolvedValue(true),listImports:vi.fn().mockResolvedValue([record]),createImport:vi.fn().mockResolvedValue(record),getImport:vi.fn().mockResolvedValue(record),saveDraft:vi.fn().mockResolvedValue(record),publish:vi.fn().mockResolvedValue(1),deleteImport:vi.fn().mockResolvedValue(undefined),suggestTitles:vi.fn().mockResolvedValue([])};
+ deps={allowedOrigins:['https://jaeinlee0502.github.io'],verifyUser:vi.fn().mockResolvedValue({id:actor}),isAdmin:vi.fn().mockResolvedValue(true),listImports:vi.fn().mockResolvedValue([record]),createImport:vi.fn().mockResolvedValue(record),getImport:vi.fn().mockResolvedValue(record),saveDraft:vi.fn().mockResolvedValue(record),publish:vi.fn().mockResolvedValue(1),deleteImport:vi.fn().mockResolvedValue(undefined),suggestTitles:vi.fn().mockResolvedValue([]),suggestMetadata:vi.fn().mockResolvedValue([])};
 });
 async function call(body: unknown,options: {method?:string;token?:string|null;origin?:string;contentType?:string;raw?:string;length?:string}={}) {
  const headers=new Headers({'authorization':'Bearer '+(options.token??'valid'),'content-type':options.contentType??'application/json'});
@@ -138,6 +138,26 @@ describe('관리자 PDF 검수 등록 API',()=>{
   expect(deps.suggestTitles).not.toHaveBeenCalled();
   vi.mocked(deps.suggestTitles).mockRejectedValueOnce(new ImportError(429,'AI_RATE_LIMITED','요청 제한'));
   expect((await call(base)).data.code).toBe('AI_RATE_LIMITED');
+ });
+ it('제목·태그 분류도 같은 관리자·초안·요청 제한을 적용한다',async()=>{
+  const q={clientId,number:3,text:'1987년 6월 민주 항쟁',passageText:'',instruction:'',tags:[]};
+  const suggestions=[{clientId,title:'민주화 운동과 직선제 개헌',tags:['현대사','정치사'],reviewNote:'1987년 민주화 운동 자료'}];
+  vi.mocked(deps.suggestMetadata).mockResolvedValue(suggestions);
+  const result=await call({action:'suggest-metadata',id,subject:'한국사',questions:[q]});
+  expect(result.data.suggestions).toEqual(suggestions);
+  expect(deps.suggestMetadata).toHaveBeenCalledExactlyOnceWith({subject:'한국사',questions:[q],explanationText:''});
+  vi.mocked(deps.isAdmin).mockResolvedValueOnce(false);
+  expect((await call({action:'suggest-metadata',id,subject:'한국사',questions:[q]})).response.status).toBe(403);
+  vi.mocked(deps.getImport).mockResolvedValueOnce({...record,status:'published'});
+  expect((await call({action:'suggest-metadata',id,subject:'한국사',questions:[q]})).data.code).toBe('IMPORT_PUBLISHED');
+  expect((await call({action:'suggest-metadata',id,subject:'한국사',questions:Array(11).fill(q)})).response.status).toBe(400);
+  expect(deps.suggestMetadata).toHaveBeenCalledTimes(1);
+ });
+ it('AI 분류 검수 안내를 초안에 보존하고 길이와 형식을 검사한다',async()=>{
+  const q={...question(),aiReviewNote:'시대 태그 확인이 필요해요.'};
+  expect((await call({action:'save-draft',id,metadata:{},questions:[q]})).response.status).toBe(200);
+  expect(deps.saveDraft).toHaveBeenCalledWith(actor,id,{},[q],[]);
+  for(const aiReviewNote of [1,'가'.repeat(601)]) expect((await call({action:'save-draft',id,metadata:{},questions:[{...q,aiReviewNote}]})).response.status).toBe(400);
  });
  it('등록한 자료를 초안으로 수정하거나 삭제할 수 없다',async()=>{
   vi.mocked(deps.getImport).mockResolvedValue({...record,status:'published'});

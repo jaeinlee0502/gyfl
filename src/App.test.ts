@@ -142,6 +142,20 @@ describe('학교 서재 입장과 문제 탐색', () => {
     wrapper.unmount()
   })
 
+  it('현대사 필터는 제목이나 선택지의 시대 단어가 아니라 저장한 시대 태그로 구분한다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    library.questionItems.value = [
+      exam('ancient', 3, '통일 신라의 통치 제도', ['선사·고대', '정치사'], { passage: '오답 선택지에 현대사 사건을 제시한다.' }),
+      exam('modern', 20, '민주화 운동과 직선제 개헌', ['현대사', '정치사'], { passage: '오답 선택지에 개항과 3·1 운동을 제시한다.' }),
+      exam('colonial', 15, '일제강점기 민족 운동', ['일제강점기', '정치사']),
+    ]
+    await wrapper.findAll('.tags button').find(b => b.text().includes('현대사'))!.trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.question-card').text()).toContain('민주화 운동과 직선제 개헌')
+    wrapper.unmount()
+  })
+
   it('승인된 계정만 문제 이미지와 공식 EBS 해설 링크를 본다', async () => {
     const wrapper = mount(App)
     await flushPromises()

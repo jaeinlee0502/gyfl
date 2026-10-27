@@ -6,11 +6,11 @@ import { subjects, type Subject } from '../data'
 import { useExamImports } from '../exam-imports'
 import { inferExamMetadata, openExamPdf } from '../pdf-import'
 import { isGenericQuestionTitle, suggestQuestionTitle } from '../question-titles'
-import { MAX_PDF_BYTES, MAX_PDF_PAGES, ebsExamListUrl, passageImageKey, type ExamImportMetadata, type ExamImportRecord, type ImportPassageDraft, type ImportQuestionDraft, type PdfRegion, type RenderedPdfImage } from '../import-types'
+import { MAX_PDF_BYTES, MAX_PDF_PAGES, ebsExamListUrl, passageImageKey, type AiMetadataSuggestion, type ExamImportMetadata, type ExamImportRecord, type ImportPassageDraft, type ImportQuestionDraft, type PdfRegion, type RenderedPdfImage } from '../import-types'
 
 const emit = defineEmits<{ close: []; changed: []; published: [payload: { count: number; subject: Subject }] }>()
 const { configured, user, authReady, isAdmin } = useAccount()
-const { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport, suggestTitles } = useExamImports()
+const { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport, suggestTitles, suggestMetadata } = useExamImports()
 const allowed = computed(() => configured && authReady.value && Boolean(user.value) && isAdmin.value)
 const dialog = ref<HTMLDialogElement | null>(null)
 const chosenFile = ref<File | null>(null)
@@ -32,7 +32,7 @@ const deleteTarget = ref<ExamImportRecord | null>(null)
 const metadata = reactive<Partial<ExamImportMetadata>>({ sourceUrl: '', explanationUrl: '' })
 const questions = ref<ImportQuestionDraft[]>([])
 const passages = ref<ImportPassageDraft[]>([])
-type TitleCandidate = { questionId: string; previous: string; title: string; signature: string; selected: boolean; source?: 'ai' }
+type TitleCandidate = { questionId: string; previous: string; title: string; signature: string; selected: boolean; source?: 'ai'; tags?: string[]; reviewNote?: string }
 const titleSuggestions = reactive<Record<string, TitleCandidate>>({})
 const titleCandidates = ref<TitleCandidate[] | null>(null)
 const explanationText = ref('')
@@ -84,6 +84,7 @@ const canToggleReview = computed(() => allowed.value && !busy.value && !editingI
     && passage.regions.every((_, index) => passagePreviews.has(passageImageKey(passage.clientId, index)))))
 const passageMap = computed(() => new Map(passages.value.map(p => [p.clientId, p])))
 const selectedTitleCount = computed(() => titleCandidates.value?.filter(candidate => candidate.selected && currentTitleCandidate(candidate)).length ?? 0)
+const hasMetadataCandidates = computed(() => titleCandidates.value?.some(candidate => candidate.tags !== undefined))
 const passagesValid = computed(() => passages.value.length <= 100
   && new Set(passages.value.map(p => p.clientId)).size === passages.value.length
   && passages.value.every(p => p.title.trim().length > 0 && p.title.length <= 200
@@ -248,6 +249,74 @@ function clearExplanation() {
   explanationText.value = ''; explanationName.value = ''; explanationMetadata.value = {}
   clearTitleSuggestions()
 }
+async function requestAiMetadata(items: ImportQuestionDraft[], ticket: number,
+  apply: (item: ImportQuestionDraft, suggestion: AiMetadataSuggestion, signature: string) => void) {
+  const subject = metadata.subject!
+  for (let offset = 0; offset < items.length; offset += 5) {
+    if (!current(ticket) || metadata.subject !== subject) return
+    progress.value = `AI가 제목과 태그를 분류하고 있어요 (${Math.min(offset + 5, items.length)}/${items.length})`
+    const batch = items.slice(offset, offset + 5)
+    const signatures = new Map(batch.map(item => [item.clientId, titleSignature(item)]))
+    const inputs = []
+    for (const item of batch) {
+      const input = titleInput(item)
+      if (/[\uE000-\uF8FF\uFFFD]/u.test(input.text) && document.value) input.text = await document.value.regionText(item.regions)
+      if (!current(ticket)) return
+      inputs.push({ clientId: item.clientId, number: item.number, text: input.text.slice(0, 6000),
+        passageText: (input.passageText ?? '').slice(0, 8000), instruction: input.instruction ?? '', tags: input.tags })
+    }
+    const suggestions = await suggestMetadata(activeRecord.value!.id, subject, inputs, explanationText.value)
+    if (!current(ticket) || metadata.subject !== subject) return
+    for (const suggestion of suggestions) {
+      const item = batch.find(item => item.clientId === suggestion.clientId)
+      const signature = item && signatures.get(item.clientId)!
+      if (item && signature && titleSignature(item) === signature) apply(item, suggestion, signature)
+    }
+  }
+}
+async function setAiDefaults(ticket: number) {
+  if (!questions.value.length) return
+  warnings.value = warnings.value.filter(warning => !warning.startsWith('추천 태그는 문제의 단어를 기준으로'))
+  for (const item of questions.value) {
+    item.tags = []
+    item.aiReviewNote = 'AI 분류 미완료: 과목을 확인한 뒤 AI 제목·태그 추천을 실행해 주세요.'
+  }
+  if (!metadata.subject) {
+    warnings.value.push('과목을 선택한 뒤 AI 제목·태그 추천으로 기본 분류를 채워 주세요.')
+    return
+  }
+  let completed = 0
+  try {
+    await requestAiMetadata([...questions.value], ticket, (item, suggestion) => {
+      item.title = suggestion.title
+      item.tags = [...suggestion.tags]
+      item.aiReviewNote = suggestion.reviewNote
+      item.reviewed = false
+      completed++
+    })
+  } catch (cause) {
+    if (!current(ticket)) return
+    warnings.value.push(`AI 제목·태그 추천은 ${completed}/${questions.value.length}문항까지 완료했어요. ${friendly(cause)} 나머지 문항은 태그를 비워 두었으니 다시 추천하거나 직접 입력해 주세요.`)
+  }
+}
+async function recommendAiMetadata(question?: ImportQuestionDraft) {
+  if (!allowed.value || busy.value || !activeRecord.value || !metadata.subject || explanationMismatch.value) return
+  const ticket = version
+  const candidates: TitleCandidate[] = []
+  busy.value = true; error.value = ''; notice.value = ''
+  if (question) delete titleSuggestions[question.clientId]
+  else titleCandidates.value = null
+  try {
+    await requestAiMetadata(question ? [question] : [...questions.value], ticket, (item, suggestion, signature) => {
+      candidates.push({ questionId: item.clientId, previous: item.title, title: suggestion.title, tags: [...suggestion.tags],
+        reviewNote: suggestion.reviewNote, signature, selected: true, source: 'ai' })
+    })
+    if (!current(ticket)) return
+    if (question) { if (candidates[0]) titleSuggestions[question.clientId] = candidates[0] }
+    else titleCandidates.value = candidates
+  } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
+  finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
+}
 async function recommendAiTitles(question?: ImportQuestionDraft) {
   if (!allowed.value || busy.value || !activeRecord.value || !metadata.subject || explanationMismatch.value) return
   const items = question ? [question] : [...questions.value]
@@ -304,6 +373,10 @@ function applyTitle(candidate: TitleCandidate) {
   if (!allowed.value || busy.value || !currentTitleCandidate(candidate)) return false
   const question = questions.value.find(question => question.clientId === candidate.questionId)!
   question.title = candidate.title
+  if (candidate.tags) {
+    question.tags = [...candidate.tags]
+    question.aiReviewNote = candidate.reviewNote ?? ''
+  }
   markChanged(question)
   return true
 }
@@ -329,10 +402,11 @@ function selectTitleCandidates(selected: boolean) {
 }
 function applySelectedTitles() {
   if (!allowed.value || busy.value) return
+  const label = hasMetadataCandidates.value ? '제목·태그' : '제목'
   let count = 0
   for (const candidate of titleCandidates.value ?? []) if (candidate.selected && applyTitle(candidate)) count++
   titleCandidates.value = null
-  if (count) notice.value = `${count}개 제목을 바꿨어요. 변경한 문항을 다시 확인하고 초안을 저장해 주세요.`
+  if (count) notice.value = `${count}개 ${label}을 바꿨어요. 변경한 문항을 다시 확인하고 초안을 저장해 주세요.`
 }
 function clearTitleSuggestions() {
   for (const id of Object.keys(titleSuggestions)) delete titleSuggestions[id]
@@ -476,6 +550,8 @@ async function beginUpload() {
     dirty.value = true
     await renderAll(ticket)
     if (!current(ticket)) return
+    await setAiDefaults(ticket)
+    if (!current(ticket)) return
     notice.value = questions.value.length ? '자동으로 찾은 시험 정보와 문항 영역을 확인해 주세요. 수정한 내용은 초안 저장으로 보관할 수 있어요.' : ''
     await loadRecords()
   } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
@@ -527,6 +603,8 @@ async function resume(record: ExamImportRecord) {
       passages.value = analysis.passages ?? []
       warnings.value = analysis.warnings
       dirty.value = true
+      await setAiDefaults(ticket)
+      if (!current(ticket)) return
     }
     await renderAll(ticket)
   } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
@@ -576,6 +654,8 @@ async function reanalyze() {
     confirmReanalyze.value = false
     await renderAll(ticket)
     if (!current(ticket)) return
+    await setAiDefaults(ticket)
+    if (!current(ticket)) return
     notice.value = '원본을 다시 분석했어요. 문항과 공통 지문을 확인한 뒤 초안을 저장해 주세요. 저장 전까지 기존 초안은 유지됩니다.'
   } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
   finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
@@ -622,11 +702,13 @@ async function removeDraft() {
 function setTags(question: ImportQuestionDraft, event: Event) {
   const value = (event.target as HTMLInputElement).value
   question.tags = [...new Set(value.split(/[,，#\n]+/).map(t => t.trim()).filter(Boolean))].slice(0, 20)
+  delete question.aiReviewNote
   markChanged(question)
 }
 function toggleTag(question: ImportQuestionDraft, tag: string) {
   if (!question.tags.includes(tag) && question.tags.length >= 20) return
   question.tags = question.tags.includes(tag) ? question.tags.filter(t => t !== tag) : [...question.tags, tag]
+  delete question.aiReviewNote
   markChanged(question)
 }
 async function addQuestion() {
@@ -798,8 +880,8 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
     <div v-else class="import-dialog-content">
       <section class="import-upload" aria-labelledby="import-upload-title">
         <h3 id="import-upload-title">1. 문제지 PDF 선택</h3>
-        <p>문제지만 올려도 분류할 수 있어요. 해설지는 필수가 아니며 정답·해설은 EBS 링크로 연결합니다. 최대 20MB·40쪽까지 읽을 수 있어요.</p>
-        <p class="import-small">원본과 검수 초안은 관리자만 볼 수 있어요. 자동 태그는 키워드 추천이므로 등록 전 확인해 주세요.</p>
+        <p>문제지만 올리면 AI가 제목과 태그를 자동 추천해요. 해설지는 필수가 아니며 정답·해설은 EBS 링크로 연결합니다. 최대 20MB·40쪽까지 읽을 수 있어요.</p>
+        <p class="import-small">원본과 검수 초안은 관리자만 볼 수 있어요. 제목·태그 추천에는 문제 텍스트를 연결된 AI에 보내며, 분류 결과는 등록 전 확인해 주세요.</p>
         <div class="import-file-row"><label class="import-file-field"><span class="sr-only">문제지 PDF 파일</span><input type="file" accept="application/pdf,.pdf" :disabled="busy || dirty" @change="chooseFile"></label><button class="import-primary" :disabled="busy || dirty || !chosenFile" @click="beginUpload"><FileUp :size="19" /> PDF 분석·업로드</button></div>
         <p v-if="dirty" class="import-small">수정 중인 초안을 저장한 뒤 다른 파일을 선택할 수 있어요.</p>
       </section>
@@ -807,7 +889,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
       <p v-if="activeRecord && document && !busy && !questions.length" class="import-message is-error" role="alert">등록할 문항이 없어요. PDF에서 문항 번호를 읽지 못했거나 모든 문항이 제외되었을 수 있어요. 원본을 확인하고 아래의 ‘문항 직접 추가’를 이용하거나 초안을 저장해 주세요.</p>
       <section v-if="confirmClose" class="import-confirm" aria-labelledby="import-close-title"><h3 id="import-close-title">저장하지 않은 수정 내용이 있어요</h3><p>창을 닫으면 마지막으로 저장한 초안에서 다시 시작합니다.</p><div class="import-actions"><button class="import-secondary" @click="confirmClose = false">계속 검수하기</button><button class="import-danger" @click="closeNow">저장하지 않고 닫기</button></div></section>
       <section v-if="deleteTarget" class="import-confirm" aria-labelledby="import-delete-title"><h3 id="import-delete-title">{{ deleteTarget.status === 'published' ? '등록 완료된 자료를 삭제할까요?' : '이 미등록 초안을 삭제할까요?' }}</h3><p><strong>{{ deleteTarget.file_name }}</strong>의 원본 PDF와 초안을 삭제합니다.</p><p v-if="deleteTarget.status === 'published'">이 파일로 등록한 모든 문항·공통 지문·이미지와 사용자들의 해당 문항 저장 기록도 함께 삭제되며 되돌릴 수 없어요. 삭제 후 수정한 PDF를 다시 올려 등록할 수 있어요.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="deleteTarget = null">취소</button><button class="import-danger" :disabled="busy" @click="removeDraft">{{ deleteTarget.status === 'published' ? '등록 자료 삭제하기' : '초안 삭제하기' }}</button></div></section>
-      <section v-if="confirmReanalyze" class="import-confirm" aria-labelledby="import-reanalyze-title"><h3 id="import-reanalyze-title">원본 PDF를 다시 분석할까요?</h3><p>현재 화면의 문항·제목·태그·영역·공통 지문 연결을 새 분석 결과로 교체하고 검수 확인을 해제합니다. 시험 정보는 유지합니다. 저장된 초안은 ‘초안 저장’을 누를 때 바뀝니다.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="confirmReanalyze = false">취소</button><button class="import-primary" :disabled="busy" @click="reanalyze">원본 다시 분석하기</button></div></section>
+      <section v-if="confirmReanalyze" class="import-confirm" aria-labelledby="import-reanalyze-title"><h3 id="import-reanalyze-title">원본 PDF를 다시 분석할까요?</h3><p>현재 화면의 문항·제목·태그·영역·공통 지문 연결을 새 분석 결과로 교체하고 검수 확인을 해제합니다. 시험 정보는 유지하며 제목·태그는 AI로 다시 추천합니다. 저장된 초안은 ‘초안 저장’을 누를 때 바뀝니다.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="confirmReanalyze = false">취소</button><button class="import-primary" :disabled="busy" @click="reanalyze">원본 다시 분석하기</button></div></section>
       <details class="import-draft-list" :open="!activeRecord">
         <summary>저장된 업로드 · {{ records.length }}개</summary><div class="import-list-heading"><p>미등록 초안은 이어서 검수할 수 있어요. 등록 완료된 자료를 고치려면 삭제 후 수정한 PDF를 다시 올려 주세요.</p><button class="import-secondary" :disabled="busy || listLoading" @click="loadRecords"><RefreshCw :size="17" /> 목록 새로고침</button></div>
         <p v-if="listLoading" role="status">목록을 불러오고 있어요…</p><p v-if="listError" class="import-message is-error" role="alert">{{ listError }}</p>
@@ -842,31 +924,31 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
           </article>
         </section>
         <section class="import-question-review" aria-labelledby="import-review-title">
-          <div class="import-section-heading"><div><h3 id="import-review-title">4. 문항·태그 검수</h3><p>확인 {{ reviewedCount }}/{{ questions.length }}문항 · 문항별 그림·보기·선택지와 공통 지문 연결을 확인해 주세요.</p></div><div class="import-actions"><button class="import-primary" :disabled="busy || !questions.length || !metadata.subject || explanationMismatch" @click="recommendAiTitles()">AI 일괄 추천</button><button class="import-secondary" :disabled="busy || !questions.length" @click="recommendAllTitles">제목 일괄 추천</button><button class="import-secondary" :disabled="busy || questions.length >= 100" @click="addQuestion"><Plus :size="18" /> 문항 직접 추가</button></div></div>
-          <p class="import-small">추천 태그는 문제 내용의 키워드로 제안한 초안입니다. 추가·수정한 뒤 문항별 확인을 눌러 주세요. 태그는 선택 사항이며 비워 두어도 등록할 수 있어요. 단답형 문항은 선택지가 없어도 정상입니다.</p>
-          <p class="import-small">제목은 문제의 개념·주제·출제 내용을 짧게 요약해 추천합니다. 직접 쓴 제목은 자동으로 바꾸지 않으며, 추천 내용을 확인한 뒤 적용할 수 있어요.</p>
+          <div class="import-section-heading"><div><h3 id="import-review-title">4. 문항·태그 검수</h3><p>확인 {{ reviewedCount }}/{{ questions.length }}문항 · 문항별 그림·보기·선택지와 공통 지문 연결을 확인해 주세요.</p></div><div class="import-actions"><button class="import-primary" :disabled="busy || !questions.length || !metadata.subject || explanationMismatch" @click="recommendAiMetadata()">AI 제목·태그 추천</button><button class="import-secondary" :disabled="busy || !questions.length || !metadata.subject || explanationMismatch" @click="recommendAiTitles()">AI 일괄 추천</button><button class="import-secondary" :disabled="busy || !questions.length" @click="recommendAllTitles">제목 일괄 추천</button><button class="import-secondary" :disabled="busy || questions.length >= 100" @click="addQuestion"><Plus :size="18" /> 문항 직접 추가</button></div></div>
+          <p class="import-small">새 PDF는 AI가 추천한 제목과 태그를 기본값으로 채웁니다. 한국사는 중심 시대 한 개와 주제를 구별합니다. 분류 근거와 원문을 확인한 뒤 문항별 확인을 눌러 주세요. 태그는 선택 사항이며 비워 두어도 등록할 수 있어요. 단답형 문항은 선택지가 없어도 정상입니다.</p>
+          <p class="import-small">제목은 문제의 개념·주제·출제 내용을 짧게 요약해 추천합니다. 저장한 초안의 제목·태그는 유지하며, 다시 추천할 때는 확인한 항목만 적용할 수 있어요.</p>
           <section class="import-explanation" aria-labelledby="import-ai-title">
-            <h4 id="import-ai-title">AI로 키워드를 담은 제목 추천</h4>
-            <p class="import-small">‘AI 일괄 추천’ 또는 문항별 ‘AI 제목 제안’을 누르면 연결된 AI 서비스(Gemini 또는 OpenAI)로 문제 본문·공통 지문을 보내 제목을 추천합니다. 해설지는 선택 사항이며, 첨부하면 같은 번호의 해설도 함께 참고합니다. 기존 제목은 추천을 확인하고 적용할 때 바뀝니다.</p>
+            <h4 id="import-ai-title">AI로 제목과 검색 태그 추천</h4>
+            <p class="import-small">PDF 분석 시 연결된 AI 서비스(Gemini 또는 OpenAI)로 문제 본문·공통 지문을 보내 제목과 태그를 자동 추천합니다. ‘AI 제목·태그 추천’으로 다시 분류하거나 ‘AI 일괄 추천 / AI 제목 제안’으로 제목만 추천할 수 있어요. 해설지는 선택 사항이며, 첨부하면 같은 번호의 해설도 함께 참고합니다. 기존 제목은 추천을 확인하고 적용할 때 바뀝니다.</p>
             <div class="import-file-row"><label class="import-file-field">해설지 PDF (선택)<input class="import-explanation-input" type="file" accept="application/pdf,.pdf" :disabled="busy" @change="chooseExplanation"></label><button v-if="explanationName" class="import-secondary" :disabled="busy" @click="clearExplanation">해설지 연결 해제</button></div>
-            <p v-if="explanationName" class="import-small">{{ explanationName }} · AI 제목 추천에만 사용하며 초안이나 서버 저장소에는 보관하지 않습니다. 다음에 창을 열면 다시 첨부해 주세요.</p>
+            <p v-if="explanationName" class="import-small">{{ explanationName }} · AI 제목·태그 추천에만 사용하며 해설 원문은 초안이나 서버 저장소에 보관하지 않습니다. 다음에 창을 열면 다시 첨부해 주세요.</p>
             <p v-if="explanationMismatch" class="import-message is-error" role="alert">해설지와 시험 정보가 달라요. 같은 회차의 해설지를 선택하거나 연결을 해제해 주세요.</p>
             <p class="import-small">기존 ‘제목 추천’과 ‘제목 일괄 추천’은 API를 쓰지 않는 키워드 규칙 방식입니다.</p>
           </section>
           <section v-if="titleCandidates" class="import-title-bulk" aria-labelledby="import-title-bulk-heading">
-            <h4 id="import-title-bulk-heading">추천 제목 확인</h4><p class="import-small">빈 제목·깨진 제목·‘의 핵심 개념’으로 끝나는 제목을 먼저 선택했어요. 바꿀 제목을 직접 선택해 주세요. 적용하면 변경한 문항의 검수 확인이 해제됩니다.</p>
+            <h4 id="import-title-bulk-heading">{{ hasMetadataCandidates ? '추천 제목·태그 확인' : '추천 제목 확인' }}</h4><p class="import-small">제목만 추천한 경우 빈 제목·깨진 제목·포괄적인 제목을 먼저 선택합니다. 제목·태그를 함께 추천한 경우 바꿀 항목과 분류 근거를 확인해 주세요. 적용하면 변경한 문항의 검수 확인이 해제됩니다.</p>
             <div class="import-actions"><button class="import-secondary" :disabled="busy" @click="selectTitleCandidates(true)">모두 선택</button><button class="import-secondary" :disabled="busy" @click="selectTitleCandidates(false)">모두 해제</button></div>
             <ul class="import-title-candidate-list"><li v-for="candidate in titleCandidates" :key="candidate.questionId" class="import-title-candidate">
               <label><input v-model="candidate.selected" type="checkbox" :disabled="busy || !currentTitleCandidate(candidate)"><span>{{ questions.find(question => question.clientId === candidate.questionId)?.number }}번 제목 바꾸기</span></label>
-              <p class="import-title-previous">현재: {{ candidate.previous || '제목 없음' }}</p><p class="import-title-proposed">추천: {{ candidate.title }}</p><p v-if="!currentTitleCandidate(candidate)" class="import-small">문항 내용이나 제목이 바뀌었어요. 다시 추천해 주세요.</p>
+              <p class="import-title-previous">현재: {{ candidate.previous || '제목 없음' }}</p><p class="import-title-proposed">추천: {{ candidate.title }}</p><p v-if="candidate.tags" class="import-small">현재 태그: {{ questions.find(item => item.clientId === candidate.questionId)?.tags.join(', ') || '없음' }} → 추천 태그: {{ candidate.tags.join(', ') || '확인 필요' }}</p><p v-if="candidate.reviewNote" class="import-small">분류 참고: {{ candidate.reviewNote }}</p><p v-if="!currentTitleCandidate(candidate)" class="import-small">문항 내용이나 제목이 바뀌었어요. 다시 추천해 주세요.</p>
             </li></ul>
             <p v-if="!titleCandidates.length" class="import-small">현재 제목과 추천 제목이 모두 같아요.</p>
-            <div class="import-actions"><button class="import-secondary" :disabled="busy" @click="titleCandidates = null">제목 추천 닫기</button><button class="import-primary" :disabled="busy || !selectedTitleCount" @click="applySelectedTitles">선택한 제목 {{ selectedTitleCount }}개 적용</button></div>
+            <div class="import-actions"><button class="import-secondary" :disabled="busy" @click="titleCandidates = null">제목 추천 닫기</button><button class="import-primary" :disabled="busy || !selectedTitleCount" @click="applySelectedTitles">선택한 {{ hasMetadataCandidates ? '제목·태그' : '제목' }} {{ selectedTitleCount }}개 적용</button></div>
           </section>
           <p v-if="!questions.length" class="import-message">문항 경계를 자동으로 찾지 못했어요. ‘문항 직접 추가’에서 페이지와 영역을 지정할 수 있어요.</p>
           <article v-for="question in questions" :key="question.clientId" class="import-question-card" :data-question="question.clientId">
             <div class="import-question-fields"><label>문항 번호<input v-model.number="question.number" type="number" min="1" max="100" :disabled="busy" @input="markChanged(question)"></label><label class="import-question-title-field">제목<input v-model="question.title" maxlength="200" placeholder="문제의 주제나 개념을 입력해 주세요" :disabled="busy" @input="markChanged(question)"></label><label>배점<input v-model.number="question.points" type="number" min="1" max="10" :disabled="busy" @input="markChanged(question)"></label></div>
-            <div class="import-title-tools"><button class="import-secondary" :disabled="busy" @click="recommendTitle(question)">제목 추천</button><button class="import-primary" :disabled="busy || !metadata.subject || explanationMismatch" @click="recommendAiTitles(question)">AI 제목 제안</button><div v-if="titleSuggestions[question.clientId]" class="import-title-suggestion"><p><strong>{{ titleSuggestions[question.clientId]!.source === 'ai' ? 'AI 추천 제목' : '추천 제목' }}</strong> {{ titleSuggestions[question.clientId]!.title }}</p><p v-if="!currentTitleCandidate(titleSuggestions[question.clientId]!)" class="import-small">문항 내용이 바뀌었어요. 다시 추천해 주세요.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="delete titleSuggestions[question.clientId]">추천 닫기</button><button class="import-primary" :disabled="busy || !currentTitleCandidate(titleSuggestions[question.clientId]!)" @click="applyTitle(titleSuggestions[question.clientId]!)">추천 제목 적용</button></div></div></div>
+            <div class="import-title-tools"><button class="import-secondary" :disabled="busy" @click="recommendTitle(question)">제목 추천</button><button class="import-primary" :disabled="busy || !metadata.subject || explanationMismatch" @click="recommendAiTitles(question)">AI 제목 제안</button><button class="import-secondary" :disabled="busy || !metadata.subject || explanationMismatch" @click="recommendAiMetadata(question)">이 문항 AI 제목·태그 추천</button><div v-if="titleSuggestions[question.clientId]" class="import-title-suggestion"><p><strong>{{ titleSuggestions[question.clientId]!.source === 'ai' ? 'AI 추천 제목' : '추천 제목' }}</strong> {{ titleSuggestions[question.clientId]!.title }}</p><p v-if="titleSuggestions[question.clientId]!.tags" class="import-small">추천 태그: {{ titleSuggestions[question.clientId]!.tags!.join(', ') || '확인 필요' }}</p><p v-if="titleSuggestions[question.clientId]!.reviewNote" class="import-small">분류 참고: {{ titleSuggestions[question.clientId]!.reviewNote }}</p><p v-if="!currentTitleCandidate(titleSuggestions[question.clientId]!)" class="import-small">문항 내용이 바뀌었어요. 다시 추천해 주세요.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="delete titleSuggestions[question.clientId]">추천 닫기</button><button class="import-primary" :disabled="busy || !currentTitleCandidate(titleSuggestions[question.clientId]!)" @click="applyTitle(titleSuggestions[question.clientId]!)">{{ titleSuggestions[question.clientId]!.tags ? '추천 제목·태그 적용' : '추천 제목 적용' }}</button></div></div></div>
             <div class="import-question-connections">
               <label>응답 형식<select :value="question.responseType || 'multiple_choice'" :disabled="busy" @change="question.responseType = ($event.target as HTMLSelectElement).value as 'multiple_choice' | 'short_answer'; markChanged(question)"><option value="multiple_choice">선택형</option><option value="short_answer">단답형</option></select></label>
               <label>연결할 공통 지문<select class="import-passage-select" :value="question.passageClientId || ''" :disabled="busy" @change="linkPassage(question,$event)"><option value="">공통 지문 없음</option><option v-for="passage in passages" :key="passage.clientId" :value="passage.clientId">{{ passage.title || '제목 없는 공통 지문' }}</option></select></label>
@@ -877,7 +959,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
             <div class="import-question-toolbar"><button class="import-secondary" :disabled="busy" @click="editRegions(question)"><Scissors :size="17" /> 영역 조정</button><button class="import-text-danger" :disabled="busy" @click="removeQuestion(question)"><Trash2 :size="17" /> 문항 제외</button></div>
             <label class="import-tags-field">풀이 안내 <span class="import-small">여러 번호가 공유하는 풀이 지시가 있으면 여기에 적어 주세요.</span><textarea v-model="question.instruction" class="import-instruction-field" rows="2" maxlength="2000" :disabled="busy" @input="markChanged(question)"></textarea></label>
             <label class="import-tags-field">태그 (선택)<input :value="question.tags.join(', ')" maxlength="800" placeholder="예: 현대사, 정치사, 6·25 전쟁" :disabled="busy" @change="setTags(question, $event)"></label>
-            <div v-if="selectedSubject" class="import-suggested-tags"><button v-for="tag in selectedSubject.tags" :key="tag" :class="{ selected: question.tags.includes(tag) }" :aria-pressed="question.tags.includes(tag)" :disabled="busy" @click="toggleTag(question, tag)">#{{ tag }}</button></div>
+            <p v-if="question.aiReviewNote" class="import-small import-ai-review-note">AI 분류 참고: {{ question.aiReviewNote }}</p><div v-if="selectedSubject" class="import-suggested-tags"><button v-for="tag in selectedSubject.tags" :key="tag" :class="{ selected: question.tags.includes(tag) }" :aria-pressed="question.tags.includes(tag)" :disabled="busy" @click="toggleTag(question, tag)">#{{ tag }}</button></div>
             <details class="import-search-text"><summary>검색용 문제 내용 수정</summary><label><span class="sr-only">{{ question.number }}번 검색용 문제 내용</span><textarea v-model="question.searchText" rows="4" maxlength="30000" :disabled="busy" @input="markChanged(question)"></textarea></label></details>
             <label class="import-reviewed"><input v-model="question.reviewed" type="checkbox" :disabled="busy || !previews.has(question.clientId)" @change="dirty = true"><span><Check :size="19" /> {{ question.number }}번 이미지·태그·공통 지문 연결을 확인했어요</span></label>
             <p v-for="issue in questionIssues.get(question.clientId)" :key="issue" class="import-message is-error">{{ question.number }}번: {{ issue }}</p>

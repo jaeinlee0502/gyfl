@@ -1,11 +1,12 @@
+import { subjectTags } from '../shared/question-tags'
 export type Subject = '국어' | '수학' | '영어' | '한국사' | '통합사회' | '통합과학'
 export const subjects: { name: Subject; description: string; tags: string[] }[] = [
-  { name: '국어', description: '읽고, 생각하고, 표현하는 힘', tags: ['현대시', '고전시가', '현대소설', '고전소설', '고전산문', '독서', '인문·예술', '사회·문화', '과학·기술', '문법', '화법', '작문', '매체'] },
-  { name: '수학', description: '개념을 연결하고 풀이를 발견하는 시간', tags: ['다항식', '방정식과 부등식', '경우의 수', '행렬', '도형의 방정식', '집합과 명제', '함수', '지수와 로그', '삼각함수', '수열', '미분', '적분', '확률과 통계', '제곱근', '일차함수', '삼각비', '닮음', '원주각', '순환소수', '분산', '피타고라스 정리'] },
-  { name: '영어', description: '문맥 속에서 발견하는 언어의 감각', tags: ['주제·제목', '요지·주장', '목적·심경', '빈칸 추론', '글의 순서', '문장 삽입', '어법', '어휘', '내용 일치', '요약', '무관한 문장', '지칭 추론', '듣기'] },
-  { name: '한국사', description: '시대의 흐름 속에서 오늘을 읽다', tags: ['선사·고대', '중세', '근세', '근대', '일제강점기', '현대사', '정치사', '경제사', '사회사', '문화사'] },
-  { name: '통합사회', description: '사람과 사회, 우리가 살아가는 세계', tags: ['윤리', '정치', '법', '경제', '인권', '헌법', '사회정의', '시장경제', '금융', '지리', '기후와 환경', '문화', '사회문화', '세계사', '세계화', '평화', '지속가능발전'] },
-  { name: '통합과학', description: '현상을 관찰하고 세상을 이해하는 방법', tags: ['물리', '화학', '생명과학', '지구과학', '과학의 기초', '물질의 규칙성', '역학 시스템', '지구 시스템', '생명 시스템', '화학 변화', '생태계', '에너지', '과학과 미래 사회'] },
+  { name: '국어', description: '읽고, 생각하고, 표현하는 힘', tags: [...subjectTags['국어']!] },
+  { name: '수학', description: '개념을 연결하고 풀이를 발견하는 시간', tags: [...subjectTags['수학']!] },
+  { name: '영어', description: '문맥 속에서 발견하는 언어의 감각', tags: [...subjectTags['영어']!] },
+  { name: '한국사', description: '시대의 흐름 속에서 오늘을 읽다', tags: [...subjectTags['한국사']!] },
+  { name: '통합사회', description: '사람과 사회, 우리가 살아가는 세계', tags: [...subjectTags['통합사회']!] },
+  { name: '통합과학', description: '현상을 관찰하고 세상을 이해하는 방법', tags: [...subjectTags['통합과학']!] },
 ]
 export interface ExamPassageImage { imageUrl: string; width: number; height: number; page: number }
 export interface ExamPassage { id: string; title: string; text: string; images: ExamPassageImage[] }

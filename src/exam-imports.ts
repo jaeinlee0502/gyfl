@@ -6,7 +6,7 @@ import {
   MAX_PDF_BYTES, MAX_PDF_PAGES, passageImageKey,
   type ExamImportMetadata, type ExamImportRecord, type ImportPassageDraft, type ImportQuestionDraft,
   type PdfRegion, type RenderedPdfImage,
-  type AiTitleQuestion, type AiTitleSuggestion,
+  type AiTitleQuestion, type AiTitleSuggestion, type AiMetadataSuggestion,
 } from './import-types'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -289,5 +289,21 @@ export function useExamImports() {
     })).titles
   }
 
-  return { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport, suggestTitles, cancelPending }
+  async function suggestMetadata(id: string, subject: string, questions: AiTitleQuestion[], explanationText = '') {
+    const identity = capture(); checkId(id)
+    const result = (await request<{ suggestions: AiMetadataSuggestion[] }>(identity, {
+      action: 'suggest-metadata', id, subject, questions, explanationText,
+    })).suggestions
+    const allowedTags = subjects.find(item => item.name === subject)?.tags ?? []
+    const ids = new Set(questions.map(question => question.clientId))
+    if (!Array.isArray(result) || result.length !== questions.length || result.some(item => !item
+      || !ids.delete(item.clientId) || typeof item.title !== 'string' || !item.title.trim() || item.title.length > 80
+      || !Array.isArray(item.tags) || item.tags.length > 6 || new Set(item.tags).size !== item.tags.length
+      || item.tags.some(tag => !allowedTags.includes(tag)) || typeof item.reviewNote !== 'string' || item.reviewNote.length > 600)) {
+      throw new Error(friendlyError('AI_INVALID_RESPONSE'))
+    }
+    return result
+  }
+
+  return { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport, suggestTitles, suggestMetadata, cancelPending }
 }
