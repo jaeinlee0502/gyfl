@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ArrowUpRight, Bookmark, Check, ChevronDown, Pencil } from 'lucide-vue-next'
 import type { Question } from '../data'
+import PrivateQuestionImage from './PrivateQuestionImage.vue'
 
-defineProps<{ question: Question; saved: boolean; disabled: boolean; pending: boolean; answerOpen: boolean; related?: boolean; canEditTags?: boolean }>()
+defineProps<{ question: Question; saved: boolean; disabled: boolean; pending: boolean; answerOpen: boolean; related?: boolean; canEditTags?: boolean; loadImage?: (path: string) => Promise<string> }>()
 const emit = defineEmits<{
   save: [id: string]; answer: [id: string]; tag: [tag: string]; image: [question: Question]; editTags: [question: Question]
 }>()
@@ -17,9 +18,8 @@ const emit = defineEmits<{
     <div v-if="question.kind === 'exam'" class="question-body exam-question-body">
       <h3 class="exam-question-title">{{ String(question.number).padStart(2, '0') }}. {{ question.title }}</h3>
       <p v-if="question.instruction" class="question-instruction">{{ question.instruction }}</p>
-      <button v-if="question.imageUrl" type="button" class="exam-image-button" :aria-label="`${question.number}번 문제 크게 보기`" @click="emit('image', question)"><img class="exam-question-image" :src="question.imageUrl" :width="question.width" :height="question.height" :alt="`${question.year}년 고${question.grade} ${question.month}월 ${question.subject} ${question.number}번 문제 원문`" loading="lazy" decoding="async"></button>
-      <p v-else class="storage-message">이미지를 불러오지 못했어요. 문제 다시 불러오기를 이용해 주세요.</p>
-      <p v-if="question.imageUrl" class="image-zoom-hint">문제 이미지를 누르면 크게 볼 수 있어요.</p>
+      <PrivateQuestionImage :src="question.imageUrl" :path="question.imagePath" :width="question.width" :height="question.height" :load-image="loadImage" :button-label="`${question.number}번 문제 크게 보기`" :alt="`${question.year}년 고${question.grade} ${question.month}월 ${question.subject} ${question.number}번 문제 원문`" @image="emit('image', { ...question, imageUrl: $event })" />
+      <p class="image-zoom-hint">문제 이미지를 누르면 크게 볼 수 있어요.</p>
       <p class="exam-source"><span v-if="question.responseType === 'short_answer'" class="response-type">단답형 · </span>{{ question.points }}점 · 원본 {{ question.sourcePage }}쪽</p>
     </div>
     <div v-else class="question-body">

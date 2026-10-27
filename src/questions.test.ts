@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  rpc: vi.fn(), from: vi.fn(), range: vi.fn(), passageIn: vi.fn(), storageFrom: vi.fn(), download: vi.fn(), maybeSingle: vi.fn(),
+  rpc: vi.fn(), from: vi.fn(), range: vi.fn(), passageIn: vi.fn(), storageFrom: vi.fn(), download: vi.fn(), maybeSingle: vi.fn(), eq: vi.fn(),
 }))
 vi.mock('./lib/supabase', () => ({
   supabase: { rpc: mocks.rpc, from: mocks.from, storage: { from: mocks.storageFrom } },
@@ -20,7 +20,7 @@ const exam = (number = 1) => ({
 beforeEach(() => {
   vi.resetAllMocks()
   mocks.rpc.mockResolvedValue({ data: true, error: null })
-  const builder = { select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: mocks.range, eq: vi.fn().mockReturnThis(), maybeSingle: mocks.maybeSingle }
+  const builder = { select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: mocks.range, eq: mocks.eq.mockReturnThis(), maybeSingle: mocks.maybeSingle }
   const passageBuilder = { select: vi.fn().mockReturnThis(), in: mocks.passageIn }
   mocks.from.mockImplementation(table => table === 'exam_passages' ? passageBuilder : builder)
   mocks.passageIn.mockResolvedValue({ data: [], error: null })
@@ -37,6 +37,7 @@ describe('학교 전용 문항 불러오기', () => {
   it('태그 충돌 뒤 최신 태그만 다시 읽고 이미지를 재요청하지 않는다', async () => {
     const library = useQuestionLibrary()
     await library.loadQuestions()
+    await library.loadImage(exam().image_path)
     mocks.maybeSingle.mockResolvedValueOnce({ data: { id: exam().id, tags: ['현대사', '경제사'] }, error: null })
     expect(await library.loadQuestionTags(exam().id)).toEqual(['현대사', '경제사'])
     expect(library.questionItems.value[0]!.tags).toEqual(['현대사', '경제사'])
@@ -46,6 +47,7 @@ describe('학교 전용 문항 불러오기', () => {
   it('공유 태그 저장 결과를 반영하면서 기존 문제 이미지는 유지한다', async () => {
     const library = useQuestionLibrary()
     await library.loadQuestions()
+    await library.loadImage(exam().image_path)
     mocks.rpc.mockResolvedValueOnce({ data: { id: exam().id, tags: ['현대사', '수업 분류'] }, error: null })
     expect(await library.updateQuestionTags(exam().id, ['현대사'], ['현대사', ' 수업  분류 '])).toEqual(['현대사', '수업 분류'])
     expect(mocks.rpc).toHaveBeenLastCalledWith('update_exam_question_tags', { p_question_id: exam().id, p_expected_tags: ['현대사'], p_tags: ['현대사', '수업 분류'] })
@@ -96,11 +98,15 @@ describe('학교 전용 문항 불러오기', () => {
     expect(library.error.value).toBeTruthy()
   })
 
-  it('비공개 저장소에서 인증 다운로드하고 EBS 링크와 원문 검색 정보를 연결한다', async () => {
+  it('선택한 과목의 목록을 먼저 표시하고 요청한 이미지만 인증 다운로드한다', async () => {
     const library = useQuestionLibrary()
     await library.loadQuestions()
+    expect(mocks.eq).toHaveBeenCalledWith('subject', '한국사')
+    expect(mocks.download).not.toHaveBeenCalled()
+    expect(library.questionItems.value[0]).toMatchObject({ imageUrl: '', imagePath: exam().image_path })
+    await library.loadImage(exam().image_path)
     expect(mocks.storageFrom).toHaveBeenCalledWith('school-questions')
-    expect(mocks.download).toHaveBeenCalledWith('2025/03/history/1.webp', { cacheNonce: expect.any(String) }, { cache: 'no-store' })
+    expect(mocks.download).toHaveBeenCalledWith('2025/03/history/1.webp', { cacheNonce: expect.any(String) }, { cache: 'no-store', signal: expect.any(AbortSignal) })
     expect(library.questionItems.value[0]).toMatchObject({
       kind: 'exam', imageUrl: 'blob:private-question', curriculum: 'unverified',
       passage: '검색할 문제 원문', explanationUrl: 'https://www.ebsi.co.kr/ebs/exam',
@@ -115,25 +121,29 @@ describe('학교 전용 문항 불러오기', () => {
     let finish!: (result: unknown) => void
     mocks.download.mockImplementation(() => new Promise(resolve => { finish = resolve }))
     const library = useQuestionLibrary()
-    const pending = library.loadQuestions()
-    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalled())
+    await library.loadQuestions()
+    const pending = library.loadImage(exam().image_path)
     library.clearQuestions()
     finish({ data: new Blob(['image']), error: null })
-    await pending
+    await expect(pending).rejects.toThrow('문제 목록이 바뀌었어요')
     expect(library.questionItems.value).toEqual([])
     expect(URL.createObjectURL).not.toHaveBeenCalled()
     expect(library.error.value).toBe('')
   })
 
-  it('일부 이미지 실패 시 불완전한 문항 목록을 표시하지 않고 할당한 URL을 해제한다', async () => {
+  it('한 이미지가 실패해도 목록과 다른 이미지는 유지하며 해당 이미지만 재시도한다', async () => {
     mocks.range.mockResolvedValue({ data: [exam(1), exam(2)], error: null })
     mocks.download.mockResolvedValueOnce({ data: new Blob(['image']), error: null })
       .mockResolvedValueOnce({ data: null, error: new Error('denied') })
     const library = useQuestionLibrary()
     await library.loadQuestions()
-    expect(library.questionItems.value).toEqual([])
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:private-question')
-    expect(library.error.value).toBeTruthy()
+    await library.loadImage(exam(1).image_path)
+    await expect(library.loadImage(exam(2).image_path)).rejects.toThrow('이미지를 불러오지 못했어요')
+    expect(library.questionItems.value).toHaveLength(2)
+    expect(library.error.value).toBe('')
+    await expect(library.loadImage(exam(2).image_path)).resolves.toBe('blob:private-question')
+    expect(mocks.download).toHaveBeenCalledTimes(3)
+    library.clearQuestions()
   })
 
   it('잘못된 외부 링크는 버튼에 전달하지 않는다', async () => {
@@ -159,12 +169,15 @@ describe('학교 전용 문항 불러오기', () => {
     const library = useQuestionLibrary()
     await library.loadQuestions()
     expect(mocks.passageIn).toHaveBeenCalledWith('id', [shared.id])
+    expect(mocks.download).not.toHaveBeenCalled()
+    await Promise.all([library.loadImage(shared.images[0]!.path), library.loadImage(shared.images[0]!.path),
+      library.loadImage(exam(41).image_path), library.loadImage(exam(42).image_path)])
     expect(mocks.download.mock.calls.map(call => call[0])).toEqual([
       shared.images[0]!.path, '2025/03/history/41.webp', '2025/03/history/42.webp',
     ])
     expect(library.questionItems.value[0]!.sharedPassage).toBe(library.questionItems.value[1]!.sharedPassage)
     expect(library.questionItems.value[0]).toMatchObject({
-      passage: '검색할 문제 원문 다음 글을 읽고 답하시오. 숫자와 언어의 한계',
+      passage: '검색할 문제 원문 다음 글을 읽고 답하시오.',
       instruction: '다음 글을 읽고 답하시오.', responseType: 'multiple_choice',
       sharedPassage: { title: shared.title, images: [{ imageUrl: 'blob:private-1', page: 8 }] },
     })
@@ -196,14 +209,61 @@ describe('학교 전용 문항 불러오기', () => {
     mocks.download.mockResolvedValueOnce({ data: new Blob(['part-one']), error: null })
       .mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
     const library = useQuestionLibrary()
-    const pending = library.loadQuestions()
-    await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledOnce())
+    await library.loadQuestions()
+    await library.loadImage('imports/exam/passages/passage/0.webp')
+    const pending = library.loadImage('imports/exam/passages/passage/1.webp')
     library.clearQuestions()
     finish({ data: new Blob(['late-part-two']), error: null })
-    await pending
+    await expect(pending).rejects.toThrow('문제 목록이 바뀌었어요')
     expect(library.questionItems.value).toEqual([])
     expect(URL.createObjectURL).toHaveBeenCalledOnce()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:private-question')
     expect(library.error.value).toBe('')
+  })
+
+  it('문항이 많아도 목록을 읽을 때 이미지는 전송하지 않는다', async () => {
+    const records = Array.from({ length: 600 }, (_, i) => exam(i + 1))
+    mocks.range.mockImplementation(async (start: number, end: number) => ({ data: records.slice(start, end + 1), error: null }))
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    expect(library.questionItems.value).toHaveLength(600)
+    expect(mocks.range).toHaveBeenCalledTimes(4)
+    expect(mocks.download).not.toHaveBeenCalled()
+    await library.loadImage(records[0]!.image_path)
+    await library.loadImage(records[0]!.image_path)
+    expect(mocks.download).toHaveBeenCalledOnce()
+    await expect(library.loadImage('unlisted/private-draft.webp')).rejects.toThrow('이미지 경로')
+    library.clearQuestions()
+  })
+
+  it('이미지 동시 요청은 네 개로 제한하고 이후 요청은 대기시킨다', async () => {
+    const records = Array.from({ length: 8 }, (_, i) => exam(i + 1))
+    mocks.range.mockResolvedValue({ data: records, error: null })
+    const finish: Array<(result: unknown) => void> = []
+    mocks.download.mockImplementation(() => new Promise(resolve => { finish.push(resolve) }))
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    const pending = records.map(record => library.loadImage(record.image_path))
+    expect(mocks.download).toHaveBeenCalledTimes(4)
+    finish.slice(0, 4).forEach(resolve => resolve({ data: new Blob(['image']), error: null }))
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledTimes(8))
+    finish.slice(4).forEach(resolve => resolve({ data: new Blob(['image']), error: null }))
+    await Promise.all(pending)
+    library.clearQuestions()
+  })
+
+  it('과목 변경 시 대기 중인 이미지 요청을 취소하고 늦은 결과를 버린다', async () => {
+    const records = Array.from({ length: 6 }, (_, i) => exam(i + 1))
+    mocks.range.mockResolvedValue({ data: records, error: null })
+    const finish: Array<(result: unknown) => void> = []
+    mocks.download.mockImplementation(() => new Promise(resolve => { finish.push(resolve) }))
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    const pending = Promise.allSettled(records.map(record => library.loadImage(record.image_path)))
+    library.clearQuestions()
+    finish.forEach(resolve => resolve({ data: new Blob(['image']), error: null }))
+    expect((await pending).every(result => result.status === 'rejected')).toBe(true)
+    expect(mocks.download).toHaveBeenCalledTimes(4)
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
   })
 })

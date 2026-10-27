@@ -65,6 +65,50 @@ beforeEach(() => {
 })
 
 describe('학교 서재 입장과 문제 탐색', () => {
+  it('한국사 추천 키워드는 지정한 9개만 표시하고 다른 태그는 문항에서 검색할 수 있다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    library.questionItems.value = [...records, exam('joseon', 4, '조선의 제도', ['근세', '조선 후기'])]
+    await flushPromises()
+    expect(wrapper.findAll('.tags .tag-label').map(label => label.text().replace(/^#\s*/, '')))
+      .toEqual(['선사·고대', '중세', '근대', '일제강점기', '현대사', '정치사', '경제사', '사회사', '문화사'])
+    await wrapper.findAll('.question-tags button').find(button => button.text() === '#근세')!.trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.exam-question-title').text()).toContain('조선의 제도')
+    wrapper.unmount()
+  })
+
+  it('처음에는 일부만 표시하고 검색·태그 개수는 과목 전체 문항을 기준으로 계산한다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    library.questionItems.value = Array.from({ length: 45 }, (_, index) => exam(`many-${index}`, index + 1, `문항 ${index + 1}`, ['현대사']))
+    await flushPromises()
+    expect(wrapper.findAll('.question-card')).toHaveLength(20)
+    expect(wrapper.get('.result-count').text()).toBe('45')
+    expect(wrapper.findAll('.tags button').find(button => button.text().includes('현대사'))!.get('.tag-count').text()).toBe('45')
+    await wrapper.get('.load-more-questions').trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(40)
+    await wrapper.get('[aria-label="문제 검색"]').setValue('문항 45')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.exam-question-title').text()).toContain('문항 45')
+    await wrapper.get('.filter-reset').trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(20)
+    expect(library.loadQuestions).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it('과목을 선택할 때 해당 과목만 요청하고 다른 과목의 추가 태그는 계속 표시한다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    expect(library.loadQuestions).toHaveBeenCalledWith('한국사')
+    library.loadQuestions.mockImplementationOnce(async () => {
+      library.questionItems.value = [exam('social-1', 1, '인권과 정치', ['정치', '수업 준비'], { subject: '통합사회' })]
+    })
+    await wrapper.findAll('.subject-tabs button').find(button => button.text().includes('통합사회'))!.trigger('click')
+    expect(library.loadQuestions).toHaveBeenLastCalledWith('통합사회')
+    expect(wrapper.findAll('.tags button').some(button => button.text().includes('수업 준비'))).toBe(true)
+    wrapper.unmount()
+  })
   it('관리자가 아닌 승인 교사도 태그를 수정하고 새 태그로 바로 검색한다', async () => {
     const wrapper = mount(App)
     await flushPromises()
@@ -78,8 +122,8 @@ describe('학교 서재 입장과 문제 탐색', () => {
     await editor.get('form').trigger('submit'); await flushPromises()
     expect(library.updateQuestionTags).toHaveBeenCalledWith('exam-21', ['현대사', '정치사'], ['현대사', '수업 분류'])
     expect(wrapper.find('.question-tags-dialog').exists()).toBe(false)
-    const customTag = wrapper.findAll('.tags button').find(button => button.text().includes('수업 분류'))!
-    expect(customTag.text()).toContain('1')
+    expect(wrapper.findAll('.tags button').some(button => button.text().includes('수업 분류'))).toBe(false)
+    const customTag = wrapper.findAll('.question-tags button').find(button => button.text().includes('수업 분류'))!
     await customTag.trigger('click')
     expect(wrapper.findAll('.question-card')).toHaveLength(1)
     expect(wrapper.get('.exam-question-title').text()).toContain('민주주의의 변화')
@@ -354,11 +398,12 @@ describe('학교 서재 입장과 문제 탐색', () => {
     await flushPromises()
     const sharedPassage = { id: 'passage-korean-22', title: '이문구 「암소」', text: '황씨와 암소가 등장하는 이야기',
       images: [{ imageUrl: 'blob:shared-passage', width: 900, height: 1800, page: 8 }] }
-    library.questionItems.value = [
+    const subjectQuestions = [
       exam('korean-22', 22, '서술 방식 파악', ['현대소설', '서술방식'], { subject: '국어', sharedPassage }),
       exam('korean-23', 23, '인물의 행동 이해', ['현대소설', '내용이해'], { subject: '국어', sharedPassage }),
       exam('korean-13', 13, '단어의 의미 관계', ['문법'], { subject: '국어' }),
     ]
+    library.loadQuestions.mockImplementationOnce(async () => { library.questionItems.value = subjectQuestions })
     await wrapper.findAll('.subject-tabs button').find(button => button.text().includes('국어'))!.trigger('click')
     expect(wrapper.findAll('.question-card')).toHaveLength(3)
     expect(wrapper.findAll('.shared-passage-card')).toHaveLength(1)
@@ -413,9 +458,10 @@ describe('학교 서재 입장과 문제 탐색', () => {
   it('단답형과 공통 풀이 안내를 표시하며 안내 문구로도 검색할 수 있다', async () => {
     const wrapper = mount(App)
     await flushPromises()
-    library.questionItems.value = [exam('math-22', 22, '식의 계산', ['다항식'], {
+    const subjectQuestions = [exam('math-22', 22, '식의 계산', ['다항식'], {
       subject: '수학', instruction: '정수로 답을 쓰시오.', responseType: 'short_answer',
     })]
+    library.loadQuestions.mockImplementationOnce(async () => { library.questionItems.value = subjectQuestions })
     await wrapper.findAll('.subject-tabs button').find(button => button.text().includes('수학'))!.trigger('click')
     await wrapper.get('[aria-label="문제 검색"]').setValue('정수')
     expect(wrapper.findAll('.question-card')).toHaveLength(1)

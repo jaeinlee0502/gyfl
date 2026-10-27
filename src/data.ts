@@ -8,14 +8,14 @@ export const subjects: { name: Subject; description: string; tags: string[] }[] 
   { name: '통합사회', description: '사람과 사회, 우리가 살아가는 세계', tags: [...subjectTags['통합사회']!] },
   { name: '통합과학', description: '현상을 관찰하고 세상을 이해하는 방법', tags: [...subjectTags['통합과학']!] },
 ]
-export interface ExamPassageImage { imageUrl: string; width: number; height: number; page: number }
+export interface ExamPassageImage { imageUrl: string; imagePath?: string; width: number; height: number; page: number }
 export interface ExamPassage { id: string; title: string; text: string; images: ExamPassageImage[] }
 export interface Question {
   id: string; subject: Subject; grade: 1 | 2; year: number; month: 3 | 6 | 9 | 10;
   number: number; title: string; tags: string[]; prompt: string;
   passage: string; choices: string[]; answer: number; explanation: string;
   kind: 'demo' | 'exam'; curriculum: '2022' | 'unverified';
-  imageUrl?: string; width?: number; height?: number; points?: number;
+  imageUrl?: string; imagePath?: string; width?: number; height?: number; points?: number;
   sourceUrl?: string; explanationUrl?: string; sourcePage?: number;
   sharedPassage?: ExamPassage;
   instruction?: string;

@@ -61,10 +61,20 @@ export function useQuestionLibrary() {
   const error = ref('')
   let version = 0
   let imageUrls: string[] = []
+  const imageTargets = new Map<string, Set<{ imageUrl?: string }>>()
+  const imageCache = new Map<string, Promise<string>>()
+  const imageQueue: Array<{ path: string; ticket: number; promise: Promise<string>; resolve: (url: string) => void; reject: (reason: Error) => void }> = []
+  let activeImages = 0
+  let imageController = new AbortController()
 
   function release(urls: string[]) { for (const url of urls) URL.revokeObjectURL(url) }
   function clearQuestions() {
     ++version
+    imageController.abort()
+    imageController = new AbortController()
+    for (const task of imageQueue.splice(0)) task.reject(new Error('문제 목록이 바뀌었어요.'))
+    imageCache.clear()
+    imageTargets.clear()
     release(imageUrls)
     imageUrls = []
     questionItems.value = []
@@ -72,13 +82,48 @@ export function useQuestionLibrary() {
     error.value = ''
   }
 
-  async function loadQuestions() {
+  function pumpImages() {
+    while (activeImages < 4 && imageQueue.length) {
+      const task = imageQueue.shift()!
+      if (task.ticket !== version || !supabase) { task.reject(new Error('문제 목록이 바뀌었어요.')); continue }
+      activeImages++
+      void (async () => {
+        try {
+          const { data, error: imageError } = await supabase!.storage.from('school-questions')
+            .download(task.path, { cacheNonce: crypto.randomUUID() }, { cache: 'no-store', signal: imageController.signal })
+          if (task.ticket !== version) throw new Error('문제 목록이 바뀌었어요.')
+          if (imageError || !data) throw new Error('이미지를 불러오지 못했어요. 다시 시도해 주세요.')
+          const url = URL.createObjectURL(data)
+          imageUrls.push(url)
+          for (const target of imageTargets.get(task.path) ?? []) target.imageUrl = url
+          task.resolve(url)
+        } catch (cause) {
+          if (imageCache.get(task.path) === task.promise) imageCache.delete(task.path)
+          task.reject(cause instanceof Error ? cause : new Error('이미지를 불러오지 못했어요.'))
+        } finally { activeImages--; pumpImages() }
+      })()
+    }
+  }
+
+  function loadImage(path: string): Promise<string> {
+    if (!validPath(path) || !imageTargets.has(path)) return Promise.reject(new Error('이미지 경로를 확인하지 못했어요. 문제 목록을 다시 불러와 주세요.'))
+    const cached = imageCache.get(path)
+    if (cached) return cached
+    let resolve!: (url: string) => void
+    let reject!: (reason: Error) => void
+    const promise = new Promise<string>((yes, no) => { resolve = yes; reject = no })
+    imageCache.set(path, promise)
+    imageQueue.push({ path, ticket: version, promise, resolve, reject })
+    pumpImages()
+    return promise
+  }
+
+  async function loadQuestions(subject: Subject = '한국사') {
     clearQuestions()
     const current = version
     const client = supabase
     if (!client) { error.value = '서재 연결을 준비 중이에요. 관리자에게 문의해 주세요.'; return }
     loading.value = true
-    const allocated: string[] = []
     try {
       // Recheck server-side access on every load, including browser retries.
       const access = await client.rpc('has_school_access')
@@ -89,6 +134,7 @@ export function useQuestionLibrary() {
       for (let offset = 0; ; offset += pageSize) {
         const { data, error: queryError } = await client.from('exam_questions')
           .select('id,subject,grade,year,month,number,title,tags,image_path,width,height,points,source_url,explanation_url,source_page,curriculum_status,search_text,passage_id,instruction,response_type')
+          .eq('subject', subject)
           .order('year', { ascending: false }).order('month', { ascending: false })
           .order('id', { ascending: true }).range(offset, offset + pageSize - 1)
         if (current !== version) return
@@ -96,17 +142,8 @@ export function useQuestionLibrary() {
         records.push(...(data ?? []) as ExamRecord[])
         if (!data || data.length < pageSize) break
       }
-      if (!records.every(validRecord)) throw new Error('invalid exam record')
+      if (!records.every(q => validRecord(q) && q.subject === subject)) throw new Error('invalid exam record')
       const stale = Symbol('stale question library')
-      async function imageUrl(path: string) {
-        const { data, error: imageError } = await client!.storage.from('school-questions')
-          .download(path, { cacheNonce: crypto.randomUUID() }, { cache: 'no-store' })
-        if (current !== version) throw stale
-        if (imageError || !data) throw imageError ?? new Error('missing image')
-        const url = URL.createObjectURL(data)
-        allocated.push(url)
-        return url
-      }
       const passageIds = [...new Set(records.flatMap(record => record.passage_id ? [record.passage_id] : []))]
       const passageRecords: PassageRecord[] = []
       for (let offset = 0; offset < passageIds.length; offset += 100) {
@@ -121,44 +158,36 @@ export function useQuestionLibrary() {
         || !passageRecords.every(validPassage)) throw new Error('invalid common passage')
       const passages = new Map<string, ExamPassage>()
       for (const passage of passageRecords) {
-        const images: ExamPassage['images'] = []
-        for (let offset = 0; offset < passage.images.length; offset += 4) {
-          const results = await Promise.allSettled(passage.images.slice(offset, offset + 4).map(async image => ({
-            imageUrl: await imageUrl(image.path), width: image.width, height: image.height, page: image.page,
-          })))
-          if (results.some(result => result.status === 'rejected')) throw new Error('common passage image failed')
-          for (const result of results) if (result.status === 'fulfilled') images.push(result.value)
-        }
+        const images = passage.images.map(image => ({ imageUrl: '', imagePath: image.path, width: image.width, height: image.height, page: image.page }))
         passages.set(passage.id, { id: passage.id, title: passage.title, text: passage.search_text, images })
       }
-      const items: Question[] = []
-      // Limit parallel image requests while preserving exam order.
-      for (let offset = 0; offset < records.length; offset += 4) {
-        const results = await Promise.allSettled(records.slice(offset, offset + 4).map(async q => {
-          const url = await imageUrl(q.image_path)
-          const sharedPassage = q.passage_id ? passages.get(q.passage_id) : undefined
-          return {
-            id: q.id, subject: q.subject as Subject, grade: q.grade as 1 | 2,
-            year: q.year, month: q.month as Question['month'], number: q.number,
-            title: q.title, tags: q.tags, prompt: q.title,
-            passage: [q.search_text, q.instruction, sharedPassage?.text].filter(Boolean).join(' '), choices: [],
-            answer: 0, explanation: '', kind: 'exam' as const,
-            curriculum: q.curriculum_status === 'verified_2022' ? '2022' as const : 'unverified' as const,
-            imageUrl: url, width: q.width, height: q.height, points: q.points,
-            sourceUrl: officialLink(q.source_url), explanationUrl: officialLink(q.explanation_url),
-            sourcePage: q.source_page,
-            instruction: q.instruction ?? '', responseType: q.response_type === 'short_answer' ? 'short_answer' as const : 'multiple_choice' as const,
-            sharedPassage,
-          }
-        }))
-        if (current !== version) { release(allocated); return }
-        if (results.some(r => r.status === 'rejected')) throw new Error('image download failed')
-        for (const result of results) if (result.status === 'fulfilled' && result.value) items.push(result.value)
-      }
-      imageUrls = allocated
+      const items: Question[] = records.map(q => {
+        const sharedPassage = q.passage_id ? passages.get(q.passage_id) : undefined
+        return {
+          id: q.id, subject: q.subject as Subject, grade: q.grade as 1 | 2,
+          year: q.year, month: q.month as Question['month'], number: q.number,
+          title: q.title, tags: q.tags, prompt: q.title,
+          passage: [q.search_text, q.instruction].filter(Boolean).join(' '), choices: [],
+          answer: 0, explanation: '', kind: 'exam' as const,
+          curriculum: q.curriculum_status === 'verified_2022' ? '2022' as const : 'unverified' as const,
+          imageUrl: '', imagePath: q.image_path, width: q.width, height: q.height, points: q.points,
+          sourceUrl: officialLink(q.source_url), explanationUrl: officialLink(q.explanation_url),
+          sourcePage: q.source_page,
+          instruction: q.instruction ?? '', responseType: q.response_type === 'short_answer' ? 'short_answer' as const : 'multiple_choice' as const,
+          sharedPassage,
+        }
+      })
+      if (current !== version) return
       questionItems.value = items
+      const register = (path: string, target: { imageUrl?: string }) => {
+        if (!imageTargets.has(path)) imageTargets.set(path, new Set())
+        imageTargets.get(path)!.add(target)
+      }
+      for (const question of questionItems.value) {
+        register(question.imagePath!, question)
+        for (const image of question.sharedPassage?.images ?? []) register(image.imagePath!, image)
+      }
     } catch {
-      release(allocated)
       if (current === version) {
         questionItems.value = []
         error.value = '문제를 불러오지 못했어요. 이용 승인을 확인하거나 잠시 후 다시 불러와 주세요.'
@@ -207,5 +236,5 @@ export function useQuestionLibrary() {
     return applyTags(id, result.data.tags)
   }
 
-  return { questionItems, loading, error, loadQuestions, clearQuestions, updateQuestionTags, loadQuestionTags }
+  return { questionItems, loading, error, loadQuestions, clearQuestions, loadImage, updateQuestionTags, loadQuestionTags }
 }
