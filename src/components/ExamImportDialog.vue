@@ -58,10 +58,17 @@ let pageVersion = 0
 function officialUrl(value: unknown) {
   try { const url = new URL(String(value)); return url.protocol === 'https:' && url.hostname === 'www.ebsi.co.kr' } catch { return false }
 }
+const metadataErrors = computed(() => ({
+  subject: subjects.some(s => s.name === metadata.subject) ? '' : '과목을 선택해 주세요.',
+  grade: [1, 2].includes(Number(metadata.grade)) ? '' : '학년을 선택해 주세요.',
+  year: Number.isInteger(metadata.year) && Number(metadata.year) >= 2025 && Number(metadata.year) <= 2100
+    ? '' : '시행 연도를 입력해 주세요. 2025~2100년 사이의 정수여야 해요.',
+  month: [3, 6, 9, 10].includes(Number(metadata.month)) ? '' : '시행월을 선택해 주세요.',
+  sourceUrl: officialUrl(metadata.sourceUrl) ? '' : '자료 출처에 EBS 공식 링크를 입력해 주세요.',
+  explanationUrl: officialUrl(metadata.explanationUrl) ? '' : '정답·해설에 EBS 공식 링크를 입력해 주세요.',
+}))
 const completeMetadata = computed<ExamImportMetadata | null>(() => {
-  if (!subjects.some(s => s.name === metadata.subject) || ![1, 2].includes(Number(metadata.grade))
-    || !Number.isInteger(metadata.year) || Number(metadata.year) < 2025 || Number(metadata.year) > 2100
-    || ![3, 6, 9, 10].includes(Number(metadata.month)) || !officialUrl(metadata.sourceUrl) || !officialUrl(metadata.explanationUrl)) return null
+  if (Object.values(metadataErrors.value).some(Boolean)) return null
   return { subject: metadata.subject!, grade: metadata.grade!, year: metadata.year!, month: metadata.month!, sourceUrl: metadata.sourceUrl!.trim(), explanationUrl: metadata.explanationUrl!.trim(), ...(metadata.excludedNumbers?.length ? { excludedNumbers: [...metadata.excludedNumbers] } : {}) }
 })
 const selectedSubject = computed(() => subjects.find(s => s.name === metadata.subject))
@@ -111,7 +118,7 @@ const questionsValid = computed(() => questions.value.length > 0 && questions.va
   && [...questionIssues.value.values()].every(issues => !issues.length))
 const publishHint = computed(() => {
   if (editingId.value) return '영역 수정을 적용하거나 취소한 뒤 저장·등록해 주세요.'
-  if (!completeMetadata.value) return '시험 정보와 EBS 링크를 모두 확인해 주세요.'
+  if (!completeMetadata.value) return Object.values(metadataErrors.value).find(Boolean)!
   if (!passagesValid.value) return '공통 지문의 제목·영역·연결 문항을 확인해 주세요. 연결하지 않은 지문은 삭제하거나 문항에 연결해 주세요.'
   if (reviewedPassageCount.value !== passages.value.length) return '공통 지문 전체와 이어지는 순서 확인을 마쳐 주세요.'
   if (!questions.value.length) return '등록할 문항을 추가해 주세요.'
@@ -492,6 +499,24 @@ async function resume(record: ExamImportRecord) {
       setMetadata(latest.metadata)
       questions.value = latest.questions.map(q => ({ ...q, regions: q.regions.map(r => ({ ...r })) }))
       passages.value = (latest.passages ?? []).map(p => ({ ...p, regions: p.regions.map(r => ({ ...r })) }))
+      const missing = (['subject', 'grade', 'year', 'month'] as const).filter(key =>
+        latest.metadata[key] == null || String(latest.metadata[key]).trim() === '')
+      if (missing.length) {
+        try {
+          const analysis = await pdf.analyze()
+          if (!current(ticket)) return
+          const restored = Object.fromEntries(missing.filter(key => analysis.metadata[key] !== undefined)
+            .map(key => [key, analysis.metadata[key]])) as Partial<ExamImportMetadata>
+          if (Object.keys(restored).length) {
+            setMetadata({ ...latest.metadata, ...restored })
+            dirty.value = true
+            notice.value = '원본 PDF에서 빠진 시험 정보를 채웠어요. 시험 정보 확인 후 초안을 저장하거나 등록해 주세요.'
+          }
+        } catch {
+          if (!current(ticket)) return
+          warnings.value = ['빠진 시험 정보를 원본에서 다시 읽지 못했어요. 표시된 항목을 직접 입력해 주세요.']
+        }
+      }
     } else {
       const analysis = await pdf.analyze()
       if (!current(ticket)) return
@@ -757,12 +782,12 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
         <section class="import-metadata" aria-labelledby="import-metadata-title">
           <h3 id="import-metadata-title">2. 시험 정보 확인</h3><p class="import-small">{{ activeRecord.file_name }} · {{ document.pageCount }}쪽. 자동으로 찾지 못한 정보는 직접 선택해 주세요.</p>
           <div class="import-metadata-grid">
-            <label>과목<select v-model="metadata.subject" :disabled="busy" @change="metadataChanged"><option :value="undefined">과목 선택</option><option v-for="s in subjects" :key="s.name" :value="s.name">{{ s.name }}</option></select></label>
-            <label>학년<select v-model.number="metadata.grade" :disabled="busy" @change="metadataChanged"><option :value="undefined">학년 선택</option><option :value="1">고1</option><option :value="2">고2</option></select></label>
-            <label>시행 연도<input v-model.number="metadata.year" type="number" min="2025" max="2100" placeholder="예: 2025" :disabled="busy" @input="metadataChanged"></label>
-            <label>시행월<select v-model.number="metadata.month" :disabled="busy" @change="metadataChanged"><option :value="undefined">시행월 선택</option><option v-for="m in [3,6,9,10]" :key="m" :value="m">{{ m }}월</option></select></label>
-            <label class="import-wide-field">자료 출처 링크<input v-model="metadata.sourceUrl" type="url" placeholder="https://www.ebsi.co.kr/…" :disabled="busy" @input="metadataChanged"></label>
-            <label class="import-wide-field">정답·해설 링크<input v-model="metadata.explanationUrl" type="url" placeholder="https://www.ebsi.co.kr/…" :disabled="busy" @input="metadataChanged"></label>
+            <label>과목<select v-model="metadata.subject" :aria-invalid="!!metadataErrors.subject" :aria-describedby="metadataErrors.subject ? 'import-subject-error' : undefined" :disabled="busy" @change="metadataChanged"><option :value="undefined">과목 선택</option><option v-for="s in subjects" :key="s.name" :value="s.name">{{ s.name }}</option></select><span v-if="metadataErrors.subject" id="import-subject-error" class="import-field-error">{{ metadataErrors.subject }}</span></label>
+            <label>학년<select v-model.number="metadata.grade" :aria-invalid="!!metadataErrors.grade" :aria-describedby="metadataErrors.grade ? 'import-grade-error' : undefined" :disabled="busy" @change="metadataChanged"><option :value="undefined">학년 선택</option><option :value="1">고1</option><option :value="2">고2</option></select><span v-if="metadataErrors.grade" id="import-grade-error" class="import-field-error">{{ metadataErrors.grade }}</span></label>
+            <label>시행 연도<input v-model.number="metadata.year" :aria-invalid="!!metadataErrors.year" :aria-describedby="metadataErrors.year ? 'import-year-error' : undefined" type="number" min="2025" max="2100" placeholder="예: 2025" :disabled="busy" @input="metadataChanged"><span v-if="metadataErrors.year" id="import-year-error" class="import-field-error">{{ metadataErrors.year }}</span></label>
+            <label>시행월<select v-model.number="metadata.month" :aria-invalid="!!metadataErrors.month" :aria-describedby="metadataErrors.month ? 'import-month-error' : undefined" :disabled="busy" @change="metadataChanged"><option :value="undefined">시행월 선택</option><option v-for="m in [3,6,9,10]" :key="m" :value="m">{{ m }}월</option></select><span v-if="metadataErrors.month" id="import-month-error" class="import-field-error">{{ metadataErrors.month }}</span></label>
+            <label class="import-wide-field">자료 출처 링크<input v-model="metadata.sourceUrl" :aria-invalid="!!metadataErrors.sourceUrl" :aria-describedby="metadataErrors.sourceUrl ? 'import-source-url-error' : undefined" type="url" placeholder="https://www.ebsi.co.kr/…" :disabled="busy" @input="metadataChanged"><span v-if="metadataErrors.sourceUrl" id="import-source-url-error" class="import-field-error">{{ metadataErrors.sourceUrl }}</span></label>
+            <label class="import-wide-field">정답·해설 링크<input v-model="metadata.explanationUrl" :aria-invalid="!!metadataErrors.explanationUrl" :aria-describedby="metadataErrors.explanationUrl ? 'import-explanation-url-error' : undefined" type="url" placeholder="https://www.ebsi.co.kr/…" :disabled="busy" @input="metadataChanged"><span v-if="metadataErrors.explanationUrl" id="import-explanation-url-error" class="import-field-error">{{ metadataErrors.explanationUrl }}</span></label>
           </div>
           <p class="import-small">EBS 공식 링크를 입력해 주세요. 회차별 링크를 모르면 학년별 기출문제 목록으로 연결할 수 있어요.</p>
           <p v-if="excludedNumbersText" class="import-message import-excluded-note">{{ metadata.subject === '영어' ? '듣기 ' : '' }}{{ excludedNumbersText }} 제외 · 등록 대상 {{ questions.length }}문항. 원래 문항 번호를 유지합니다.</p>

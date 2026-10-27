@@ -34,7 +34,9 @@ const compact = (value: string) => value.normalize('NFKC').replace(/\s+/g, '')
 export function inferExamMetadata(header: string): Partial<ExamImportMetadata> {
   const text = compact(header)
   const metadata: Partial<ExamImportMetadata> = {}
-  const year = /\b(20\d{2})(?:학년도|년)/.exec(text)?.[1]
+  // Keep separators when reading the year. Compacting "1 2025학년도"
+  // (page number + heading) first would turn it into "12025학년도".
+  const year = /(?:^|[^\d])(2\s*0\s*\d\s*\d)\s*(?:학\s*년\s*도|년)/u.exec(header.normalize('NFKC'))?.[1]?.replace(/\s+/g, '')
   const month = /(?:^|[^\d])(3|6|9|10)월/.exec(text)?.[1]
   const grade = /고(?:등학교)?([12])(?:학년)?/.exec(text)?.[1] ?? /(?:^|[^\d])([12])학년/.exec(text)?.[1]
   if (year && Number(year) >= 2025) metadata.year = Number(year)
@@ -151,7 +153,8 @@ function listeningNumbers(pages: PdfTextPage[], subject: Subject | undefined, wa
 }
 
 export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
-  const header = pages.slice(0, 2).flatMap(page => page.runs.filter(run => run.top < .19).map(run => run.text)).join(' ')
+  const header = pages.slice(0, 2).flatMap(page => page.runs.filter(run => run.top < .19)
+    .sort((a, b) => a.top - b.top || a.left - b.left).map(run => run.text)).join(' ')
   const metadata = inferExamMetadata(header)
   const warnings = ['자동 추출한 문항 영역과 태그는 초안입니다. 등록 전에 문제·보기·선택지가 모두 보이는지 확인해 주세요.']
   if (!metadata.subject || !metadata.grade || !metadata.year || !metadata.month) warnings.push('머리말에서 일부 시험 정보를 확인하지 못했어요. 과목·학년·연월을 직접 확인해 주세요.')

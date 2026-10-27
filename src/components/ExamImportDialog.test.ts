@@ -156,6 +156,63 @@ describe('관리자 PDF 업로드와 검수', () => {
     wrapper.unmount()
   })
 
+  it('25문항을 모두 확인해도 연도가 없으면 이유를 표시하고 연도 입력·재확인 후 등록한다', async () => {
+    const info = { ...metadata, subject: '통합사회' as const, month: 6 as const, year: undefined }
+    const items = Array.from({ length: 25 }, (_, i) => ({ ...question(), number: i + 1,
+      clientId: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}` }))
+    pdf.analyze.mockResolvedValueOnce({ metadata: info, pageCount: 1, questions: items, warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, '전체 검수 확인').trigger('click')
+    expect(wrapper.get('.import-publish-bar').text()).toContain('확인 25/25문항')
+    expect(wrapper.get('.import-publish-bar').text()).toContain('시행 연도를 입력해 주세요')
+    expect(wrapper.get('#import-year-error').text()).toContain('2025~2100')
+    const year = wrapper.get('.import-metadata-grid input[type="number"]')
+    expect(year.attributes('aria-invalid')).toBe('true')
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeDefined()
+    await year.setValue('2025')
+    expect(year.attributes('aria-invalid')).toBe('false')
+    expect(wrapper.find('#import-year-error').exists()).toBe(false)
+    await button(wrapper, '전체 검수 확인').trigger('click')
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeUndefined()
+    await wrapper.get('.import-publish-bar .import-primary').trigger('click'); await flushPromises()
+    expect(api.publishImport).toHaveBeenCalledWith(record().id, { ...info, year: 2025 },
+      expect.arrayContaining([expect.objectContaining({ reviewed: true, number: 25 })]), expect.any(Map), [], expect.any(Map))
+    wrapper.unmount()
+  })
+
+  it('기존 초안의 빠진 연도만 원본에서 복원하고 검수한 제목·영역을 유지한다', async () => {
+    const savedQuestion = { ...question(), title: '직접 검수한 제목', reviewed: true }
+    const saved = { ...record(), metadata: { ...metadata, year: undefined }, questions: [savedQuestion] }
+    api.listImports.mockResolvedValueOnce([saved]); api.getImport.mockResolvedValueOnce(saved)
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises()
+    await button(wrapper, '이어서 검수').trigger('click'); await flushPromises()
+    expect(pdf.analyze).toHaveBeenCalledOnce()
+    expect(wrapper.get('.import-metadata-grid input[type="number"]').element).toHaveProperty('value', '2025')
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', savedQuestion.title)
+    expect(wrapper.get('.import-reviewed input').element).toHaveProperty('checked', true)
+    expect(api.createImport).not.toHaveBeenCalled()
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeUndefined()
+    await button(wrapper, '초안 저장').trigger('click'); await flushPromises()
+    expect(api.saveDraft).toHaveBeenCalledWith(saved.id, metadata,
+      [expect.objectContaining({ title: savedQuestion.title, reviewed: true, regions: savedQuestion.regions })], [])
+    wrapper.unmount()
+  })
+
+  it('빠진 시험 정보 복원은 관리자가 이미 입력한 연도를 덮어쓰지 않는다', async () => {
+    const saved = { ...record(), metadata: { ...metadata, year: 2026, month: undefined } }
+    api.listImports.mockResolvedValueOnce([saved]); api.getImport.mockResolvedValueOnce(saved)
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises()
+    await button(wrapper, '이어서 검수').trigger('click'); await flushPromises()
+    expect(pdf.analyze).toHaveBeenCalledOnce()
+    expect(wrapper.get('.import-metadata-grid input[type="number"]').element).toHaveProperty('value', '2026')
+    await button(wrapper, '초안 저장').trigger('click'); await flushPromises()
+    expect(api.saveDraft).toHaveBeenCalledWith(saved.id, { ...metadata, year: 2026 }, expect.any(Array), [])
+    wrapper.unmount()
+  })
+
   it('저장한 초안을 이어서 검수하고 다시 업로드하지 않는다', async () => {
     api.listImports.mockResolvedValue([record()])
     const wrapper = mount(ExamImportDialog)

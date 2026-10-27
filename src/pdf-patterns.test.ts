@@ -10,6 +10,31 @@ describe('과목별 PDF 구조 분석', () => {
     expect(inferExamMetadata(`2025학년도 3월 고1 ${source}`)).toMatchObject({ subject: expected, grade: 1, year: 2025, month: 3 })
   })
 
+  it.each([
+    '1 2025학년도 6월 고1 사회탐구 영역 (통합사회)',
+    '1 2025 학 년 도 6월 고1 사회탐구 영역 (통합사회)',
+    '1 2 0 2 5 학년도 6월 고1 사회탐구 영역 (통합사회)',
+    '１ ２０２５학년도 ６월 고１ 사회탐구 영역 (통합사회)',
+  ])('페이지 번호와 연도가 인접하거나 글자가 나뉜 표지도 읽는다 (%s)', text => {
+    expect(inferExamMetadata(text)).toMatchObject({ year: 2025, month: 6, grade: 1, subject: '통합사회' })
+  })
+
+  it('연도가 없거나 더 긴 숫자의 일부이면 연도를 추측하지 않는다', () => {
+    expect(inferExamMetadata('6월 고1 사회탐구 영역 (통합사회)').year).toBeUndefined()
+    expect(inferExamMetadata('12025학년도 6월 고1 사회탐구 영역 (통합사회)').year).toBeUndefined()
+  })
+
+  it('문제 본문이 먼저 추출돼도 상단의 시험 연도를 우선한다', () => {
+    const analysis = analyzePdfText([{ page: 1, runs: [
+      item(1, .104, .186, '2018년의 사회 현상을 살펴보자.'),
+      run('1', .108, .081, .12),
+      run('2025학년도 6월 고1 전국연합학력평가 문제지', .27, .088),
+      run('사회탐구 영역 (통합사회)', .283, .122),
+    ] }])
+    expect(analysis.metadata).toMatchObject({ year: 2025, month: 6, grade: 1, subject: '통합사회' })
+    expect(analysis.questions).toHaveLength(1)
+  })
+
   it('여러 단·쪽에 이어진 공통 지문을 한번만 보관하고 각 문항에 연결한다', () => {
     const pages: PdfTextPage[] = [
       { page: 1, runs: [...header('국어'), item(1, .104, .2), item(2, .104, .5), item(3, .511, .2), run('[4 ~ 5] 다음 글을 읽고 물음에 답하시오.', .511, .5), run('공통 지문 앞부분', .525, .6)] },

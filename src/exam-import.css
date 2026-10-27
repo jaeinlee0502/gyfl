@@ -39,6 +39,8 @@
 .import-records span { font-size: .875rem; color: #748175; margin-top: 5px; }
 .import-metadata-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
 .import-metadata-grid label, .import-question-fields label, .import-tags-field, .import-region-fields label { display: flex; flex-direction: column; gap: 8px; font-weight: 600; min-width: 0; }
+.import-metadata-grid [aria-invalid="true"] { border-color: #b54a3a; }
+.import-field-error { color: #a13f32; font-size: .85rem; line-height: 1.5; font-weight: 400; }
 .import-wide-field { grid-column: span 2; }
 .import-dialog-content input:not([type=checkbox]):not([type=file]), .import-dialog-content select, .import-dialog-content textarea { width: 100%; min-height: 44px; border: 1px solid #cfdcd1; border-radius: 7px; background: #fff; color: #344e3d; font: inherit; padding: 10px 12px; box-sizing: border-box; }
 .import-dialog-content textarea { resize: vertical; line-height: 1.8; }
