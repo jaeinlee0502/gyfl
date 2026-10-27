@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { suggestQuestionTitle } from './question-titles'
+import { isGenericQuestionTitle, suggestQuestionTitle } from './question-titles'
 
 describe('문항의 개념과 주제를 담는 제목 추천', () => {
   it('원문 수식을 제목으로 복사하지 않고 제곱근 계산 개념을 표시한다', () => {
@@ -39,7 +39,7 @@ describe('문항의 개념과 주제를 담는 제목 추천', () => {
   })
 
   it('개념을 확인할 수 없으면 검수자가 고른 태그를 활용한다', () => {
-    expect(suggestQuestionTitle({ subject: '수학', number: 2, text: '값을 구하시오.', tags: ['행렬', '행렬'] })).toBe('행렬의 핵심 개념')
+    expect(suggestQuestionTitle({ subject: '수학', number: 2, text: '값을 구하시오.', tags: ['행렬', '행렬'] })).toBe('행렬')
   })
 
   it('국어는 공통 지문의 주제와 문항의 평가 요소를 함께 쓴다', () => {
@@ -104,6 +104,43 @@ describe('문항의 개념과 주제를 담는 제목 추천', () => {
     expect(suggestQuestionTitle({ subject: '통합사회', number: 2, text: '원·달러 환율 변동의 영향을 파악하시오.' })).toBe('환율 변동과 경제생활')
     expect(suggestQuestionTitle({ subject: '통합과학', number: 9, text: '전압과 전류를 측정한 전기 회로를 나타낸 것이다.' })).toBe('전기 회로와 전압·전류의 관계')
     expect(suggestQuestionTitle({ subject: '한국사', number: 7, text: '서원에서 이루어진 교육과 사림의 활동을 설명하시오.' })).toBe('서원의 교육 기능과 사림의 활동')
+  })
+
+  it('넓은 지리 태그 대신 기온과 생활 모습이라는 구체적인 소재를 쓴다', () => {
+    expect(suggestQuestionTitle({ subject: '통합사회', number: 2,
+      text: '지도에 표시된 두 지역의 생활 모습을 비교한 것은? 개 썰매를 끄는 원주민, 카카오를 수확하는 농민, 최난월 평균 기온', tags: ['지리', '기후와 환경'] }))
+      .toBe('기후와 지역별 생활 모습 비교')
+    expect(suggestQuestionTitle({ subject: '통합사회', number: 19,
+      text: '쯔놈 문자와 분짜 음식, 전통 의복으로 나타나는 문화를 조사하였다.' }))
+      .toBe('문자·음식·의복에 나타난 지역 문화')
+  })
+
+  it.each([
+    ['빗살무늬 토기를 사용하며 움집에서 정착 생활을 하였다.', '빗살무늬 토기와 정착 생활'],
+    ['관리에게 전지와 시지를 지급하여 수조권을 행사하게 하였다.', '전지·시지 지급과 토지 제도'],
+    ['집현전을 설치하고 의정부 서사제를 실시하였다.', '집현전과 유교 정치의 운영'],
+    ['서원 철폐, 호포제 실시와 통치 체제 정비에 대한 발표이다.', '서원 철폐와 통치 체제 정비'],
+    ['일연이 고조선부터 후삼국 시대까지의 역사서를 편찬하였다.', '일연의 역사서 편찬과 불교 문화'],
+  ])('한국사 제목은 자료의 키워드를 쓰고 숨겨진 정답을 추측하지 않는다 (%s)', (text, title) => {
+    expect(suggestQuestionTitle({ subject: '한국사', number: 1, text, tags: ['정치사', '문화사'] })).toBe(title)
+  })
+
+  it('보기의 오답을 사실로 단정하거나 태그로 주제를 결정하지 않는다', () => {
+    expect(suggestQuestionTitle({ subject: '통합과학', number: 2,
+      text: '빨간색, 초록색, 파란색 빛과 보름달을 관측하였다. <보 기> ㄱ. 달은 광원이다. ㄴ. 광합성이 일어난다.', tags: ['지구과학'] }))
+      .toBe('빛의 색과 보름달 관측')
+    expect(suggestQuestionTitle({ subject: '통합사회', number: 8,
+      text: '디지털 탄소 발자국이 증가하는 이유와 생태 시민의 자세를 설명하시오.', tags: [] }))
+      .toBe('디지털 탄소 발자국과 생태 시민')
+  })
+
+  it('규칙표에 없는 복합 개념도 본문에서 추출하고 포괄적인 옛 제목을 구별한다', () => {
+    const title = suggestQuestionTitle({ subject: '통합사회', number: 1, text: '협동조합과 공유경제를 비교하시오.', tags: ['사회'] })
+    expect(title).toContain('협동조합')
+    expect(title).toContain('공유경제')
+    expect(title).not.toContain('핵심 개념')
+    expect(isGenericQuestionTitle('지리·기후와 환경의 핵심 개념')).toBe(true)
+    expect(isGenericQuestionTitle('기후와 지역별 생활 모습 비교')).toBe(false)
   })
 
   it('알 수 없는 과목과 아주 긴 태그에도 제목 길이와 문자 품질을 지킨다', () => {

@@ -24,6 +24,7 @@ export interface ExamPdfDocument {
   renderQuestion(regions: PdfRegion[]): Promise<RenderedPdfImage>
   renderPage(page: number): Promise<RenderedPdfImage>
   regionText(regions: PdfRegion[]): Promise<string>
+  extractText(): Promise<string>
   destroy(): Promise<void>
 }
 
@@ -411,6 +412,11 @@ export async function openExamPdf(file: File): Promise<ExamPdfDocument> {
   return {
     pageCount: document.numPages,
     async analyze() { return analyzePdfText(await readText()) },
+    async extractText() {
+      const pages = await readText()
+      return pages.map(page => ([0, 1] as const).flatMap(column => columnLines(page, column))
+        .map(line => line.text).join('\n')).join('\n\n')
+    },
     async regionText(regions) {
       validatePdfRegions(regions, document.numPages)
       const pages = await readText()

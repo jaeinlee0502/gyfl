@@ -8,7 +8,7 @@ const record: ImportRecord={id,file_name:'문제지.pdf',sha256:'a'.repeat(64),p
 const question=()=>({clientId,number:1,title:'검수 문항',tags:['현대사'],points:3,searchText:'원문',regions:[{page:1,left:.1,top:.1,right:.5,bottom:.8}],reviewed:false});
 let deps: ImportDependencies;
 beforeEach(()=>{
- deps={allowedOrigins:['https://jaeinlee0502.github.io'],verifyUser:vi.fn().mockResolvedValue({id:actor}),isAdmin:vi.fn().mockResolvedValue(true),listImports:vi.fn().mockResolvedValue([record]),createImport:vi.fn().mockResolvedValue(record),getImport:vi.fn().mockResolvedValue(record),saveDraft:vi.fn().mockResolvedValue(record),publish:vi.fn().mockResolvedValue(1),deleteImport:vi.fn().mockResolvedValue(undefined)};
+ deps={allowedOrigins:['https://jaeinlee0502.github.io'],verifyUser:vi.fn().mockResolvedValue({id:actor}),isAdmin:vi.fn().mockResolvedValue(true),listImports:vi.fn().mockResolvedValue([record]),createImport:vi.fn().mockResolvedValue(record),getImport:vi.fn().mockResolvedValue(record),saveDraft:vi.fn().mockResolvedValue(record),publish:vi.fn().mockResolvedValue(1),deleteImport:vi.fn().mockResolvedValue(undefined),suggestTitles:vi.fn().mockResolvedValue([])};
 });
 async function call(body: unknown,options: {method?:string;token?:string|null;origin?:string;contentType?:string;raw?:string;length?:string}={}) {
  const headers=new Headers({'authorization':'Bearer '+(options.token??'valid'),'content-type':options.contentType??'application/json'});
@@ -116,6 +116,28 @@ describe('관리자 PDF 검수 등록 API',()=>{
   const conflict=await call({action:'publish',id});expect(conflict.response.status).toBe(409);expect(conflict.data.code).toBe('IMPORT_CONFLICT');
   vi.mocked(deps.publish).mockRejectedValueOnce(new ImportError(409,'IMPORT_NOT_READY','검수 필요'));
   expect((await call({action:'publish',id})).data.code).toBe('IMPORT_NOT_READY');
+ });
+ it('AI 제목 추천도 관리자와 미등록 초안만 사용하며 본문과 선택 해설을 전달한다',async()=>{
+  const q={clientId,number:2,text:'기후와 생활 모습을 비교하시오.',passageText:'',instruction:'',tags:['지리']};
+  vi.mocked(deps.suggestTitles).mockResolvedValue([{clientId,title:'기후와 지역별 생활 모습 비교'}]);
+  const result=await call({action:'suggest-titles',id,subject:'통합사회',questions:[q],explanationText:'2번 해설'});
+  expect(result.response.status).toBe(200);
+  expect(deps.suggestTitles).toHaveBeenCalledExactlyOnceWith({subject:'통합사회',questions:[q],explanationText:'2번 해설'});
+  vi.mocked(deps.isAdmin).mockResolvedValueOnce(false);
+  expect((await call({action:'suggest-titles',id,subject:'통합사회',questions:[q]})).response.status).toBe(403);
+  vi.mocked(deps.getImport).mockResolvedValueOnce({...record,status:'published'});
+  expect((await call({action:'suggest-titles',id,subject:'통합사회',questions:[q]})).data.code).toBe('IMPORT_PUBLISHED');
+  expect(deps.suggestTitles).toHaveBeenCalledTimes(1);
+ });
+ it('AI 요청의 문항 수·식별자·길이와 해설 크기를 제한한다',async()=>{
+  const q={clientId,number:2,text:'문제',passageText:'',instruction:'',tags:[]};
+  const base={action:'suggest-titles',id,subject:'통합사회',questions:[q]};
+  for(const invalid of [{questions:[]},{questions:Array(11).fill(q)},{questions:[q,q]},
+   {questions:[{...q,text:'가'.repeat(8001)}]},{explanationText:'가'.repeat(60001)},{subject:'관리자'}])
+    expect((await call({...base,...invalid})).data.code).toBe('INVALID_TITLE_REQUEST');
+  expect(deps.suggestTitles).not.toHaveBeenCalled();
+  vi.mocked(deps.suggestTitles).mockRejectedValueOnce(new ImportError(429,'AI_RATE_LIMITED','요청 제한'));
+  expect((await call(base)).data.code).toBe('AI_RATE_LIMITED');
  });
  it('등록한 자료를 초안으로 수정하거나 삭제할 수 없다',async()=>{
   vi.mocked(deps.getImport).mockResolvedValue({...record,status:'published'});

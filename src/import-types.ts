@@ -63,6 +63,16 @@ export interface RenderedPdfImage {
   height: number
 }
 
+export interface AiTitleQuestion {
+  clientId: string
+  number: number
+  text: string
+  passageText: string
+  instruction: string
+  tags: string[]
+}
+export interface AiTitleSuggestion { clientId: string; title: string }
+
 export interface ExamImportRecord {
   id: string
   file_name: string

@@ -28,7 +28,7 @@ function createApi() {
     listImports: vi.fn().mockResolvedValue([]), createImport: vi.fn().mockResolvedValue(record()),
     getImport: vi.fn().mockResolvedValue(record()), downloadPdf: vi.fn().mockResolvedValue(new Blob(['%PDF-test'], { type: 'application/pdf' })),
     saveDraft: vi.fn().mockResolvedValue(record()), publishImport: vi.fn().mockResolvedValue({ message: '등록했습니다.', count: 1 }),
-    deleteDraft: vi.fn().mockResolvedValue('초안을 삭제했어요.'), deleteImport: vi.fn().mockResolvedValue('등록 자료를 삭제했어요.'), cancelPending: vi.fn(),
+    deleteDraft: vi.fn().mockResolvedValue('초안을 삭제했어요.'), deleteImport: vi.fn().mockResolvedValue('등록 자료를 삭제했어요.'), suggestTitles: vi.fn().mockImplementation(async (_id, _subject, items) => items.map((item: { clientId: string }) => ({ clientId: item.clientId, title: '기후와 지역별 생활 모습 비교' }))), cancelPending: vi.fn(),
   }
 }
 function createPdf() {
@@ -37,7 +37,7 @@ function createPdf() {
     pageCount: 1,
     analyze: vi.fn().mockResolvedValue({ metadata: { ...metadata }, pageCount: 1, questions: [question()], warnings: [] } satisfies ExamPdfAnalysis),
     renderQuestion: vi.fn().mockResolvedValue(image), renderPage: vi.fn().mockResolvedValue(image),
-    regionText: vi.fn().mockResolvedValue('수정한 영역의 검색용 문제 내용'), destroy: vi.fn().mockResolvedValue(undefined),
+    regionText: vi.fn().mockResolvedValue('수정한 영역의 검색용 문제 내용'), extractText: vi.fn().mockResolvedValue('2025학년도 3월 고1 한국사 정답 및 해설\n1. 빗살무늬 토기의 특징'), destroy: vi.fn().mockResolvedValue(undefined),
   }
 }
 let account = createAccount()
@@ -47,8 +47,8 @@ const openPdf = vi.hoisted(() => vi.fn())
 const titleRecommendation = vi.hoisted(() => vi.fn())
 vi.mock('../account', () => ({ useAccount: () => account }))
 vi.mock('../exam-imports', () => ({ useExamImports: () => api }))
-vi.mock('../pdf-import', () => ({ openExamPdf: openPdf }))
-vi.mock('../question-titles', () => ({ suggestQuestionTitle: titleRecommendation }))
+vi.mock('../pdf-import', async importOriginal => ({ ...await importOriginal<typeof import('../pdf-import')>(), openExamPdf: openPdf }))
+vi.mock('../question-titles', async importOriginal => ({ ...await importOriginal<typeof import('../question-titles')>(), suggestQuestionTitle: titleRecommendation }))
 
 beforeEach(() => {
   vi.unstubAllGlobals()
@@ -641,6 +641,107 @@ describe('등록 조건과 등록 완료 자료 삭제', () => {
     await flushPromises()
     expect(api.deleteImport).toHaveBeenCalledTimes(2)
     expect(wrapper.find('.import-records').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('AI 제목 추천과 선택 해설지', () => {
+  it('AI 제안은 원래 제목과 검수를 유지하고 적용할 때만 바꾼다', async () => {
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await wrapper.get('.import-reviewed input').setValue(true)
+    await button(wrapper, 'AI 제목 제안').trigger('click')
+    await flushPromises()
+    expect(api.suggestTitles).toHaveBeenCalledWith(record().id, '한국사', [expect.objectContaining({ clientId: question().clientId, text: question().searchText })], '')
+    expect(wrapper.get('.import-title-suggestion').text()).toContain('AI 추천 제목')
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', question().title)
+    expect(wrapper.get('.import-reviewed input').element).toHaveProperty('checked', true)
+    await button(wrapper, '추천 제목 적용').trigger('click')
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', '기후와 지역별 생활 모습 비교')
+    expect(wrapper.get('.import-reviewed input').element).toHaveProperty('checked', false)
+    wrapper.unmount()
+  })
+
+  it('AI 일괄 요청은 나눠 전송하고 포괄적인 제목만 기본 선택한다', async () => {
+    const items = Array.from({ length: 6 }, (_, i) => ({ ...question(), number: i + 1,
+      clientId: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`,
+      title: i === 1 ? '직접 쓴 수업용 제목' : '지리의 핵심 개념' }))
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: items, warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, 'AI 일괄 추천').trigger('click')
+    await flushPromises()
+    expect(api.suggestTitles.mock.calls.map(call => call[2].length)).toEqual([5, 1])
+    expect(wrapper.findAll('.import-title-candidate input').filter(input => (input.element as HTMLInputElement).checked)).toHaveLength(5)
+    await button(wrapper, '선택한 제목 5개 적용').trigger('click')
+    expect(wrapper.findAll('.import-question-title-field input')[1]!.element).toHaveProperty('value', '직접 쓴 수업용 제목')
+    wrapper.unmount()
+  })
+
+  it('같은 회차의 해설만 AI 요청에 첨부하고 초안에는 저장하지 않는다', async () => {
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    const notes = createPdf()
+    openPdf.mockResolvedValueOnce(notes)
+    const file = new File(['%PDF-notes'], '해설.pdf', { type: 'application/pdf' })
+    const field = wrapper.get('.import-explanation-input')
+    Object.defineProperty(field.element, 'files', { configurable: true, value: [file] })
+    await field.trigger('change')
+    await flushPromises()
+    expect(notes.destroy).toHaveBeenCalledOnce()
+    expect(wrapper.get('.import-explanation').text()).toContain('해설.pdf')
+    await button(wrapper, 'AI 제목 제안').trigger('click')
+    await flushPromises()
+    expect(api.suggestTitles.mock.calls[0]![3]).toContain('빗살무늬 토기')
+    await button(wrapper, '초안 저장').trigger('click')
+    await flushPromises()
+    expect(api.saveDraft).toHaveBeenCalledWith(record().id, metadata, expect.any(Array), [])
+    await button(wrapper, '해설지 연결 해제').trigger('click')
+    expect(wrapper.find('.import-title-suggestion').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('다른 과목의 해설지와 읽을 수 없는 해설지는 연결하지 않는다', async () => {
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    for (const text of ['2025학년도 6월 고1 영어 영역 정답 및 해설', '']) {
+      const notes = createPdf(); notes.extractText.mockResolvedValueOnce(text)
+      openPdf.mockResolvedValueOnce(notes)
+      const field = wrapper.get('.import-explanation-input')
+      Object.defineProperty(field.element, 'files', { configurable: true, value: [new File(['%PDF-notes'], '다른 해설.pdf')] })
+      await field.trigger('change'); await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toMatch(/달라요|읽지 못했어요/)
+      expect(wrapper.findAll('button').some(button => button.text() === '해설지 연결 해제')).toBe(false)
+      expect(notes.destroy).toHaveBeenCalledOnce()
+    }
+    expect(api.suggestTitles).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('AI 연결 오류는 알리고 규칙 제목으로 몰래 대체하지 않는다', async () => {
+    api.suggestTitles.mockRejectedValueOnce(new Error('서버의 OPENAI_API_KEY 설정을 확인해 주세요.'))
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, 'AI 제목 제안').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('OPENAI_API_KEY')
+    expect(titleRecommendation).not.toHaveBeenCalled()
+    expect(wrapper.find('.import-title-suggestion').exists()).toBe(false)
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', question().title)
+    wrapper.unmount()
+  })
+
+  it('AI 응답을 기다리다 권한이 사라지면 결과를 적용하지 않는다', async () => {
+    let finish!: (value: Array<{ clientId: string; title: string }>) => void
+    api.suggestTitles.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, 'AI 제목 제안').trigger('click')
+    account.isAdmin.value = false
+    await flushPromises()
+    finish([{ clientId: question().clientId, title: '늦게 도착한 제목' }]); await flushPromises()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(wrapper.find('.import-title-suggestion').exists()).toBe(false)
+    expect(api.saveDraft).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

@@ -60,6 +60,17 @@ beforeEach(() => {
 })
 
 describe('관리자 PDF 업로드와 검수 자료 등록', () => {
+  it('AI 제목 요청은 관리자 API에 본문과 선택 해설만 전달하고 한도 오류를 안내한다', async () => {
+    const imports = useExamImports()
+    const items = [{ clientId: firstId, number: 1, text: '본문', passageText: '공통 지문', instruction: '', tags: [] }]
+    mocks.invoke.mockResolvedValueOnce({ data: { titles: [{ clientId: firstId, title: '본문의 구체적인 개념' }] }, error: null })
+    expect(await imports.suggestTitles(importId, '국어', items, '1번 해설')).toEqual([{ clientId: firstId, title: '본문의 구체적인 개념' }])
+    expect(mocks.invoke).toHaveBeenCalledWith('exam-admin', { body: { action: 'suggest-titles', id: importId, subject: '국어', questions: items, explanationText: '1번 해설' } })
+    mocks.invoke.mockResolvedValueOnce({ data: null, error: { context: new Response(JSON.stringify({ code: 'AI_RATE_LIMITED' }), { status: 429 }) } })
+    await expect(imports.suggestTitles(importId, '국어', items)).rejects.toThrow('OpenAI API의 사용 한도')
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
   it('비로그인 또는 일반 계정은 서버나 저장소를 호출하지 않는다', async () => {
     const imports = useExamImports()
     account.user.value = null

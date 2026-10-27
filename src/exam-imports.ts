@@ -6,6 +6,7 @@ import {
   MAX_PDF_BYTES, MAX_PDF_PAGES, passageImageKey,
   type ExamImportMetadata, type ExamImportRecord, type ImportPassageDraft, type ImportQuestionDraft,
   type PdfRegion, type RenderedPdfImage,
+  type AiTitleQuestion, type AiTitleSuggestion,
 } from './import-types'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -34,6 +35,16 @@ function friendlyError(code: string) {
     case 'REQUEST_TOO_LARGE': return '검수 내용이 너무 커요. 문항 수나 검색용 텍스트를 줄여서 저장해 주세요.'
     case 'INVALID_IMPORT': case 'INVALID_BODY': return '자료 정보를 확인하고 다시 시도해 주세요.'
     case 'STORAGE_DELETE_FAILED': return '파일을 모두 삭제하지 못했어요. 잠시 후 삭제를 다시 시도해 주세요.'
+    case 'AI_NOT_CONFIGURED': return '서버에 OpenAI API 키가 연결되지 않았어요. Supabase의 OPENAI_API_KEY 설정을 확인해 주세요.'
+    case 'AI_RATE_LIMITED': return 'OpenAI API의 사용 한도 또는 요청 제한에 도달했어요. 결제·사용 한도를 확인하거나 잠시 후 다시 시도해 주세요.'
+    case 'AI_TIMEOUT': return 'AI 응답 시간이 길어졌어요. 문항별 AI 제목 제안으로 다시 시도해 주세요.'
+    case 'AI_UNAVAILABLE': return 'OpenAI API에 연결하지 못했어요. 서버의 API 키와 모델 설정을 확인해 주세요.'
+    case 'AI_INVALID_KEY': return 'OpenAI가 API 키를 인증하지 못했어요. Supabase의 OPENAI_API_KEY 값이 올바른 API 키인지 확인해 주세요.'
+    case 'AI_ACCESS_DENIED': return 'OpenAI가 요청 권한을 허용하지 않았어요. API 키의 프로젝트 권한과 모델 접근 설정을 확인해 주세요.'
+    case 'AI_MODEL_UNAVAILABLE': return '설정된 OpenAI 모델을 사용할 수 없어요. 서버의 OPENAI_TITLE_MODEL 설정과 모델 사용 권한을 확인해 주세요.'
+    case 'AI_REQUEST_REJECTED': return 'OpenAI가 제목 생성 요청을 거절했어요. 서버의 모델 설정과 요청 형식을 확인해 주세요.'
+    case 'AI_INVALID_RESPONSE': return 'AI가 문항에 맞는 제목을 모두 반환하지 못했어요. 다시 추천해 주세요.'
+    case 'INVALID_TITLE_REQUEST': return '제목을 추천할 과목·문항·해설 내용을 확인해 주세요.'
     default: return '자료 관리 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'
   }
 }
@@ -269,5 +280,12 @@ export function useExamImports() {
     return (await request<{ message: string }>(identity, { action: 'delete-import', id })).message
   }
 
-  return { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport, cancelPending }
+  async function suggestTitles(id: string, subject: string, questions: AiTitleQuestion[], explanationText = '') {
+    const identity = capture(); checkId(id)
+    return (await request<{ titles: AiTitleSuggestion[] }>(identity, {
+      action: 'suggest-titles', id, subject, questions, explanationText,
+    })).titles
+  }
+
+  return { listImports, createImport, getImport, downloadPdf, saveDraft, publishImport, deleteDraft, deleteImport, suggestTitles, cancelPending }
 }

@@ -1,3 +1,5 @@
+import type { TitleRequest, TitleSuggestion } from './ai-titles.ts';
+
 export interface ImportMetadata {
   subject?: string; grade?: number; year?: number; month?: number;
   sourceUrl?: string; explanationUrl?: string;
@@ -29,6 +31,7 @@ export interface ImportDependencies {
   saveDraft(actorId: string, id: string, metadata: ImportMetadata, questions: ImportQuestion[], passages: ImportPassage[]): Promise<ImportRecord>;
   publish(actorId: string, id: string): Promise<number>;
   deleteImport(actorId: string, id: string, allowPublished: boolean): Promise<void>;
+  suggestTitles(input: TitleRequest): Promise<TitleSuggestion[]>;
 }
 export class ImportError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -185,6 +188,25 @@ export function createImportHandler(deps: ImportDependencies) {
       const record = await deps.getImport(input.id);
       if (!record) throw new ImportError(404,'IMPORT_NOT_FOUND','등록 자료를 찾지 못했어요.');
       if (input.action === 'get-import') return reply(200,{import:record});
+      if (input.action === 'suggest-titles') {
+        if (record.status !== 'draft') throw new ImportError(409,'IMPORT_PUBLISHED','미등록 초안에서 제목을 추천할 수 있어요.');
+        if (record.deleting_at) throw new ImportError(409,'IMPORT_DELETING','삭제 중인 자료예요.');
+        if (typeof input.subject !== 'string' || !subjects.includes(input.subject)
+          || !Array.isArray(input.questions) || input.questions.length < 1 || input.questions.length > 10
+          || (input.explanationText !== undefined && (typeof input.explanationText !== 'string' || input.explanationText.length > 60000))) invalid('INVALID_TITLE_REQUEST','제목을 추천할 문항과 해설 내용을 확인해 주세요.');
+        const ids = new Set<string>();
+        const titles: TitleRequest = { subject: input.subject, explanationText: input.explanationText as string || '', questions: input.questions.map(item => {
+          if (!object(item) || typeof item.clientId !== 'string' || !uuid.test(item.clientId) || ids.has(item.clientId.toLowerCase())
+            || !integer(item.number,1,100) || typeof item.text !== 'string' || item.text.length > 8000
+            || typeof item.passageText !== 'string' || item.passageText.length > 12000
+            || typeof item.instruction !== 'string' || item.instruction.length > 2000
+            || !Array.isArray(item.tags) || item.tags.length > 20 || item.tags.some(tag=>typeof tag!=='string'||tag.length>60)) invalid('INVALID_TITLE_REQUEST','제목을 추천할 문항 내용을 확인해 주세요.');
+          ids.add(item.clientId.toLowerCase());
+          return { clientId: item.clientId, number: item.number, text: item.text, passageText: item.passageText,
+            instruction: item.instruction, tags: item.tags as string[] };
+        }) };
+        return reply(200,{titles:await deps.suggestTitles(titles)});
+      }
       if (input.action === 'save-draft') {
         if (record.status === 'published') throw new ImportError(409,'IMPORT_PUBLISHED','이미 등록한 자료는 검수 초안으로 수정할 수 없어요.');
         const savedPassages = passages(input.passages,record.page_count);

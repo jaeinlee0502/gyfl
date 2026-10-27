@@ -49,8 +49,9 @@
 .import-section-heading p { margin: 0; color: #6c7f70; }
 .import-question-card { padding: 22px; background: #fff; border: 1px solid #dce6dd; border-radius: 10px; margin-top: 18px; scroll-margin-top: 150px; }
 .import-question-fields { display: grid; grid-template-columns: 115px minmax(0, 1fr) 100px; gap: 14px; }
-.import-title-tools { margin-top: 12px; }
-.import-title-suggestion, .import-title-bulk { margin: 12px 0; padding: 16px; border: 1px solid #cbdccd; border-radius: 8px; background: #f2f7f0; overflow-wrap: anywhere; }
+.import-title-tools { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.import-title-tools > .import-title-suggestion { flex-basis: 100%; }
+.import-title-suggestion, .import-title-bulk, .import-explanation { margin: 12px 0; padding: 16px; border: 1px solid #cbdccd; border-radius: 8px; background: #f2f7f0; overflow-wrap: anywhere; }
 .import-title-suggestion p { margin: 0 0 12px; line-height: 1.8; }
 .import-title-candidate-list { max-height: 440px; overflow-y: auto; margin: 14px 0; padding: 0; list-style: none; }
 .import-title-candidate { padding: 15px 0; border-bottom: 1px solid #d9e4d7; }
