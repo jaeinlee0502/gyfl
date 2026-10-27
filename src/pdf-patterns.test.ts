@@ -53,6 +53,51 @@ describe('과목별 PDF 구조 분석', () => {
     expect(passage.reviewed).toBe(false)
   })
 
+  it('오른쪽 단이 페이지 중앙보다 왼쪽에서 시작해도 문항과 공통 지문을 구별한다', () => {
+    const analysis = analyzePdfText([{ page: 1, runs: [...header('국어'),
+      run('[1~3] 다음 글을 읽고 물음에 답하시오.', .08, .16), run('함께 읽는 본문', .1, .3),
+      item(1, .08, .7), item(2, .486, .2), item(3, .486, .5)] }])
+    expect(analysis.questions.map(q => q.number)).toEqual([1, 2, 3])
+    expect(analysis.passages).toHaveLength(1)
+    expect(analysis.passages![0]!.regions[0]!.right).toBeLessThan(.48)
+    expect(analysis.questions[1]!.regions[0]!.left).toBeCloseTo(.48)
+    expect(analysis.questions[1]!.searchText).not.toContain('함께 읽는 본문')
+    expect(analysis.questions.every(q => q.passageClientId === analysis.passages![0]!.clientId)).toBe(true)
+  })
+
+  it('중앙 왼쪽의 오른쪽 단에서 시작하는 11~12번 지문에 앞 문항과 다른 단을 섞지 않는다', () => {
+    const analysis = analyzePdfText([
+      { page: 4, runs: [...header('국어'), item(9, .08, .15, '앞 문항 내용'),
+        run('앞 문항 선택지', .1, .6), item(10, .486, .15, '푸드테크 문항'),
+        run('[11~12] 다음 글을 읽고 물음에 답하시오.', .486, .46), run('음운 변동 지문', .5, .55)] },
+      { page: 5, runs: [run('국어 영역', .4, .1), item(11, .08, .125, '지문의 음운 변동을 적용하시오.'),
+        item(12, .08, .55), item(13, .486, .125)] },
+    ])
+    expect(analysis.questions.map(q => q.number)).toEqual([9, 10, 11, 12, 13])
+    expect(analysis.passages).toHaveLength(1)
+    const shared = analysis.passages![0]!
+    expect(shared.regions).toHaveLength(1)
+    expect(shared.regions[0]).toMatchObject({ page: 4 })
+    expect(shared.regions[0]!.left).toBeCloseTo(.48)
+    expect(shared.searchText).toContain('음운 변동 지문')
+    expect(shared.searchText).not.toMatch(/앞 문항|푸드테크|지문의 음운/)
+    expect(analysis.questions.find(q => q.number === 10)!.regions[0]!.bottom).toBeLessThan(.46)
+    expect(analysis.questions.filter(q => q.passageClientId === shared.clientId).map(q => q.number)).toEqual([11, 12])
+  })
+
+  it('이동한 오른쪽 단의 분리된 문항 번호와 이어지는 지문도 인식한다', () => {
+    const analysis = analyzePdfText([
+      { page: 1, runs: [...header('국어'), run('[34~37] 다음 글을 읽고 물음에 답하시오.', .08, .16),
+        run('앞부분', .1, .3), run('뒷부분', .5, .2), run('34', .486, .7, .51), run('. 내용을 이해한 것은?', .513, .702)] },
+      { page: 2, runs: [item(35, .08, .2), item(36, .08, .5), item(37, .486, .2)] },
+    ])
+    expect(analysis.questions.map(q => q.number)).toEqual([34, 35, 36, 37])
+    expect(analysis.passages).toHaveLength(1)
+    expect(analysis.passages![0]!.regions.map(r => r.left > .47)).toEqual([false, true])
+    expect(analysis.passages![0]!.searchText).toContain('뒷부분')
+    expect(analysis.passages![0]!.searchText).not.toContain('34 . 내용을')
+  })
+
   it('영어 공통 지시를 각 문항에 상속하며 서로 다른 지문을 묶지 않는다', () => {
     const analysis = analyzePdfText([
       { page: 1, runs: [...header('영어'), item(31, .104, .2), item(32, .104, .5), item(33, .511, .2), item(34, .511, .5), run('[31 ~ 34] 다음 빈칸에 들어갈 말로 가장 적절한 것을 고르시오.', .104, .16)] },

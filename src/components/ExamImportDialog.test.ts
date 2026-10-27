@@ -702,6 +702,61 @@ describe('등록 조건과 등록 완료 자료 삭제', () => {
   })
 })
 
+describe('원본 다시 분석', () => {
+  it('교체 범위를 확인하고 취소하면 현재 초안을 유지한다', async () => {
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await button(wrapper, '원본 다시 분석').trigger('click')
+    expect(wrapper.get('[aria-labelledby="import-reanalyze-title"]').text()).toContain('문항·제목·태그·영역·공통 지문 연결')
+    expect(pdf.analyze).toHaveBeenCalledOnce()
+    await wrapper.get('[aria-labelledby="import-reanalyze-title"] .import-secondary').trigger('click')
+    expect(wrapper.find('[aria-labelledby="import-reanalyze-title"]').exists()).toBe(false)
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', question().title)
+    expect(api.saveDraft).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('재업로드 없이 새 문항·지문을 표시하고 시험 정보를 보존하며 저장 전까지 서버 초안을 유지한다', async () => {
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    await wrapper.get('.import-metadata-grid input[type="number"]').setValue('2026')
+    const shared = passage()
+    const revised = [{ ...question(), title: '다시 분석한 문항', passageClientId: shared.clientId, reviewed: true },
+      { ...question(), clientId: '44444444-4444-4444-8444-444444444444', number: 2, passageClientId: shared.clientId, reviewed: true }]
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: revised, passages: [{ ...shared, reviewed: true }], warnings: [] })
+    await button(wrapper, '원본 다시 분석').trigger('click')
+    await button(wrapper, '원본 다시 분석하기').trigger('click'); await flushPromises()
+    expect(api.createImport).toHaveBeenCalledOnce()
+    expect(wrapper.findAll('.import-question-card')).toHaveLength(2)
+    expect(wrapper.findAll('.import-passage-card')).toHaveLength(1)
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', '다시 분석한 문항')
+    expect(wrapper.get('.import-metadata-grid input[type="number"]').element).toHaveProperty('value', '2026')
+    for (const input of wrapper.findAll('.import-reviewed input')) expect(input.element).toHaveProperty('checked', false)
+    expect(api.saveDraft).not.toHaveBeenCalled()
+    expect(URL.revokeObjectURL).toHaveBeenCalled()
+    await button(wrapper, '초안 저장').trigger('click'); await flushPromises()
+    expect(api.saveDraft).toHaveBeenCalledWith(record().id, { ...metadata, year: 2026 },
+      expect.arrayContaining([expect.objectContaining({ title: '다시 분석한 문항', reviewed: false })]),
+      [expect.objectContaining({ clientId: shared.clientId, reviewed: false })])
+    wrapper.unmount()
+  })
+
+  it('분석 실패는 현재 편집 중인 문항과 미리보기를 보존한다', async () => {
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    const before = URL.revokeObjectURL as ReturnType<typeof vi.fn>
+    const revoked = before.mock.calls.length
+    pdf.analyze.mockRejectedValueOnce(new Error('PDF 재분석 실패'))
+    await button(wrapper, '원본 다시 분석').trigger('click')
+    await button(wrapper, '원본 다시 분석하기').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('PDF 재분석 실패')
+    expect(wrapper.get('.import-question-title-field input').element).toHaveProperty('value', question().title)
+    expect(before).toHaveBeenCalledTimes(revoked)
+    expect(api.saveDraft).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
 describe('AI 제목 추천과 선택 해설지', () => {
   it('AI 제안은 원래 제목과 검수를 유지하고 적용할 때만 바꾼다', async () => {
     const wrapper = mount(ExamImportDialog)

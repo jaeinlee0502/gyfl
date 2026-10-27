@@ -27,6 +27,7 @@ const notice = ref('')
 const warnings = ref<string[]>([])
 const dirty = ref(false)
 const confirmClose = ref(false)
+const confirmReanalyze = ref(false)
 const deleteTarget = ref<ExamImportRecord | null>(null)
 const metadata = reactive<Partial<ExamImportMetadata>>({ sourceUrl: '', explanationUrl: '' })
 const questions = ref<ImportQuestionDraft[]>([])
@@ -409,6 +410,7 @@ function resetEditor() {
   warnings.value = []
   dirty.value = false
   confirmClose.value = false
+  confirmReanalyze.value = false
   deleteTarget.value = null
   error.value = ''
   notice.value = ''
@@ -543,6 +545,38 @@ async function save() {
     dirty.value = false
     notice.value = '초안을 저장했어요. 나중에 이어서 검수할 수 있어요.'
     await loadRecords()
+  } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
+  finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
+}
+async function requestReanalyze() {
+  if (busy.value) return
+  confirmReanalyze.value = true
+  await nextTick()
+  const panel = dialog.value?.querySelector<HTMLElement>('[aria-labelledby="import-reanalyze-title"]')
+  panel?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  panel?.querySelector<HTMLButtonElement>('button')?.focus()
+}
+async function reanalyze() {
+  if (!allowed.value || busy.value || !activeRecord.value || !document.value || !confirmReanalyze.value) return
+  const pdf = document.value
+  const ticket = ++version
+  const previousMetadata = Object.fromEntries(Object.entries(metadata).filter(([, value]) => value !== undefined && value !== '')) as Partial<ExamImportMetadata>
+  busy.value = true; error.value = ''; notice.value = ''; progress.value = '원본 PDF의 문항과 공통 지문을 다시 분석하고 있어요…'
+  try {
+    const analysis = await pdf.analyze()
+    if (!current(ticket)) return
+    clearTitleSuggestions()
+    clearPreviews()
+    editingId.value = ''
+    setMetadata({ ...analysis.metadata, ...previousMetadata })
+    questions.value = analysis.questions.map(question => ({ ...question, reviewed: false, regions: question.regions.map(region => ({ ...region })) }))
+    passages.value = (analysis.passages ?? []).map(passage => ({ ...passage, reviewed: false, regions: passage.regions.map(region => ({ ...region })) }))
+    warnings.value = analysis.warnings
+    dirty.value = true
+    confirmReanalyze.value = false
+    await renderAll(ticket)
+    if (!current(ticket)) return
+    notice.value = '원본을 다시 분석했어요. 문항과 공통 지문을 확인한 뒤 초안을 저장해 주세요. 저장 전까지 기존 초안은 유지됩니다.'
   } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
   finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
 }
@@ -773,6 +807,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
       <p v-if="activeRecord && document && !busy && !questions.length" class="import-message is-error" role="alert">등록할 문항이 없어요. PDF에서 문항 번호를 읽지 못했거나 모든 문항이 제외되었을 수 있어요. 원본을 확인하고 아래의 ‘문항 직접 추가’를 이용하거나 초안을 저장해 주세요.</p>
       <section v-if="confirmClose" class="import-confirm" aria-labelledby="import-close-title"><h3 id="import-close-title">저장하지 않은 수정 내용이 있어요</h3><p>창을 닫으면 마지막으로 저장한 초안에서 다시 시작합니다.</p><div class="import-actions"><button class="import-secondary" @click="confirmClose = false">계속 검수하기</button><button class="import-danger" @click="closeNow">저장하지 않고 닫기</button></div></section>
       <section v-if="deleteTarget" class="import-confirm" aria-labelledby="import-delete-title"><h3 id="import-delete-title">{{ deleteTarget.status === 'published' ? '등록 완료된 자료를 삭제할까요?' : '이 미등록 초안을 삭제할까요?' }}</h3><p><strong>{{ deleteTarget.file_name }}</strong>의 원본 PDF와 초안을 삭제합니다.</p><p v-if="deleteTarget.status === 'published'">이 파일로 등록한 모든 문항·공통 지문·이미지와 사용자들의 해당 문항 저장 기록도 함께 삭제되며 되돌릴 수 없어요. 삭제 후 수정한 PDF를 다시 올려 등록할 수 있어요.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="deleteTarget = null">취소</button><button class="import-danger" :disabled="busy" @click="removeDraft">{{ deleteTarget.status === 'published' ? '등록 자료 삭제하기' : '초안 삭제하기' }}</button></div></section>
+      <section v-if="confirmReanalyze" class="import-confirm" aria-labelledby="import-reanalyze-title"><h3 id="import-reanalyze-title">원본 PDF를 다시 분석할까요?</h3><p>현재 화면의 문항·제목·태그·영역·공통 지문 연결을 새 분석 결과로 교체하고 검수 확인을 해제합니다. 시험 정보는 유지합니다. 저장된 초안은 ‘초안 저장’을 누를 때 바뀝니다.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="confirmReanalyze = false">취소</button><button class="import-primary" :disabled="busy" @click="reanalyze">원본 다시 분석하기</button></div></section>
       <details class="import-draft-list" :open="!activeRecord">
         <summary>저장된 업로드 · {{ records.length }}개</summary><div class="import-list-heading"><p>미등록 초안은 이어서 검수할 수 있어요. 등록 완료된 자료를 고치려면 삭제 후 수정한 PDF를 다시 올려 주세요.</p><button class="import-secondary" :disabled="busy || listLoading" @click="loadRecords"><RefreshCw :size="17" /> 목록 새로고침</button></div>
         <p v-if="listLoading" role="status">목록을 불러오고 있어요…</p><p v-if="listError" class="import-message is-error" role="alert">{{ listError }}</p>
@@ -780,7 +815,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
       </details>
       <template v-if="activeRecord && document">
         <section class="import-metadata" aria-labelledby="import-metadata-title">
-          <h3 id="import-metadata-title">2. 시험 정보 확인</h3><p class="import-small">{{ activeRecord.file_name }} · {{ document.pageCount }}쪽. 자동으로 찾지 못한 정보는 직접 선택해 주세요.</p>
+          <div class="import-section-heading"><h3 id="import-metadata-title">2. 시험 정보 확인</h3><button class="import-secondary" :disabled="busy" @click="requestReanalyze">원본 다시 분석</button></div><p class="import-small">{{ activeRecord.file_name }} · {{ document.pageCount }}쪽. 자동으로 찾지 못한 정보는 직접 선택해 주세요.</p>
           <div class="import-metadata-grid">
             <label>과목<select v-model="metadata.subject" :aria-invalid="!!metadataErrors.subject" :aria-describedby="metadataErrors.subject ? 'import-subject-error' : undefined" :disabled="busy" @change="metadataChanged"><option :value="undefined">과목 선택</option><option v-for="s in subjects" :key="s.name" :value="s.name">{{ s.name }}</option></select><span v-if="metadataErrors.subject" id="import-subject-error" class="import-field-error">{{ metadataErrors.subject }}</span></label>
             <label>학년<select v-model.number="metadata.grade" :aria-invalid="!!metadataErrors.grade" :aria-describedby="metadataErrors.grade ? 'import-grade-error' : undefined" :disabled="busy" @change="metadataChanged"><option :value="undefined">학년 선택</option><option :value="1">고1</option><option :value="2">고2</option></select><span v-if="metadataErrors.grade" id="import-grade-error" class="import-field-error">{{ metadataErrors.grade }}</span></label>

@@ -115,8 +115,20 @@ interface RangeMarker extends Position { first: number; last: number; kind: 'pas
 
 function readingOrder(position: Position) { return (position.page - 1) * 2 + position.column + position.y }
 
-function columnLines(page: PdfTextPage, column: 0 | 1): TextLine[] {
-  const runs = page.runs.filter(run => (run.left < .5 ? 0 : 1) === column)
+function columnBoundary(pages: PdfTextPage[]) {
+  // Some papers start the right column before the page midpoint. Infer its
+  // number alignment first, including headings, before assembling text lines.
+  const positions = pages.flatMap(page => page.runs.filter(run => run.top >= .06 && run.top <= .91
+    && run.left >= .4 && run.left <= .64
+    && /^(?:\s*\d{1,2}\s*\.\s*(?:\D|$)|\s*\[\s*\d{1,2}\s*[~～∼–-])/u.test(run.text.normalize('NFKC')))
+    .map(run => run.left))
+  const best = positions.map(x => ({ x, count: positions.filter(other => Math.abs(other - x) < .009).length }))
+    .sort((a, b) => b.count - a.count || Math.abs(a.x - .5) - Math.abs(b.x - .5))[0]
+  return best ? best.x - .012 : .5
+}
+
+function columnLines(page: PdfTextPage, column: 0 | 1, boundary = .5): TextLine[] {
+  const runs = page.runs.filter(run => (run.left < boundary ? 0 : 1) === column)
     .sort((a, b) => a.top - b.top || a.left - b.left)
   const lines: Array<TextLine & { runs: PdfTextRun[] }> = []
   for (const run of runs) {
@@ -158,7 +170,8 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
   const metadata = inferExamMetadata(header)
   const warnings = ['자동 추출한 문항 영역과 태그는 초안입니다. 등록 전에 문제·보기·선택지가 모두 보이는지 확인해 주세요.']
   if (!metadata.subject || !metadata.grade || !metadata.year || !metadata.month) warnings.push('머리말에서 일부 시험 정보를 확인하지 못했어요. 과목·학년·연월을 직접 확인해 주세요.')
-  const lines = pages.flatMap(page => ([0, 1] as const).flatMap(column => columnLines(page, column)))
+  const boundary = columnBoundary(pages)
+  const lines = pages.flatMap(page => ([0, 1] as const).flatMap(column => columnLines(page, column, boundary)))
   const candidates: Anchor[] = []
   // A PDF may store the number and its period in separate text items.
   // Read their visual line together before matching a question number.
@@ -198,7 +211,7 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
   }
   if (anchors.length > 100) throw new Error('한 번에 최대 100문항까지 등록할 수 있어요.')
   const leftEdge = clamp((columns[0] ?? .1) - .006, .02, .2)
-  const split = columns[1] ?? .51
+  const split = columns[1] ?? boundary + .012
   const markers: RangeMarker[] = []
   for (const line of lines) {
     const range = /^\s*\[\s*(\d{1,2})\s*[~～∼–-]\s*(\d{1,2})\s*\]/.exec(line.text)
@@ -272,7 +285,7 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
     const nextMarker = markers.find(marker => marker.page === anchor.page && marker.column === anchor.column && marker.y > anchor.y + .005)
     let bottom = Math.min(next ? next.y - .008 : .913, nextMarker ? nextMarker.y - .010 : .913)
     const footer = page.runs.find(run => run.top > anchor.y + .03 && run.top < bottom
-      && (anchor.column === 0 ? run.left < .5 : run.left >= .5) && /확인\s*사항|답안지의\s*해당란|이\s*문제지에\s*관한/.test(run.text))
+      && (anchor.column === 0 ? run.left < boundary : run.left >= boundary) && /확인\s*사항|답안지의\s*해당란|이\s*문제지에\s*관한/.test(run.text))
     if (footer) bottom = footer.top - .012
     const region: PdfRegion = {
       page: anchor.page, ...bounds(anchor.column),
@@ -417,7 +430,8 @@ export async function openExamPdf(file: File): Promise<ExamPdfDocument> {
     async analyze() { return analyzePdfText(await readText()) },
     async extractText() {
       const pages = await readText()
-      return pages.map(page => ([0, 1] as const).flatMap(column => columnLines(page, column))
+      const boundary = columnBoundary(pages)
+      return pages.map(page => ([0, 1] as const).flatMap(column => columnLines(page, column, boundary))
         .map(line => line.text).join('\n')).join('\n\n')
     },
     async regionText(regions) {
