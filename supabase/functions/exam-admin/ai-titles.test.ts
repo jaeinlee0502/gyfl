@@ -55,4 +55,10 @@ describe('서버의 OpenAI 제목 추천', () => {
     await expect(generateAiTitles(input, { apiKey: 'test-key', fetcher: vi.fn().mockRejectedValue(new DOMException('timeout', 'TimeoutError')) }))
       .rejects.toMatchObject({ code: 'AI_TIMEOUT' });
   });
+
+  it('결제 크레딧 부족은 일시적인 요청량 제한과 구분한다', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ error: { code: 'insufficient_quota', message: 'private details' } }, { status: 429 }));
+    await expect(generateAiTitles(input, { apiKey: 'test-key', fetcher }))
+      .rejects.toMatchObject({ code: 'AI_QUOTA_EXCEEDED', status: 429 });
+  });
 });

@@ -46,7 +46,9 @@ export async function generateAiTitles(input: TitleRequest, options: {
     throw new TitleServiceError(503, cause instanceof Error && ['TimeoutError', 'AbortError'].includes(cause.name) ? 'AI_TIMEOUT' : 'AI_UNAVAILABLE');
   }
   if (!response.ok) {
-    const code = response.status === 429 ? 'AI_RATE_LIMITED' : response.status === 401 ? 'AI_INVALID_KEY'
+    const problem = response.status === 429 ? await response.json().catch(() => null) : null;
+    const quotaExceeded = problem?.error?.code === 'insufficient_quota' || problem?.error?.type === 'insufficient_quota';
+    const code = response.status === 429 ? (quotaExceeded ? 'AI_QUOTA_EXCEEDED' : 'AI_RATE_LIMITED') : response.status === 401 ? 'AI_INVALID_KEY'
       : response.status === 403 ? 'AI_ACCESS_DENIED' : response.status === 404 ? 'AI_MODEL_UNAVAILABLE'
         : response.status === 400 ? 'AI_REQUEST_REJECTED' : 'AI_UNAVAILABLE';
     throw new TitleServiceError(response.status === 429 ? 429 : 503, code);
