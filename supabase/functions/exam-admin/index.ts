@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
 import { ImportError, createImportHandler, type ImportRecord } from './core.ts';
-import { generateAiTitles, TitleServiceError } from './ai-titles.ts';
+import { generateAiTitles, titleServiceConfiguration, TitleServiceError } from './ai-titles.ts';
 
 const url = Deno.env.get('SUPABASE_URL');
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -42,7 +42,7 @@ const handler = createImportHandler({
   allowedOrigins,
   async suggestTitles(input) {
     try {
-      return await generateAiTitles(input,{apiKey:Deno.env.get('OPENAI_API_KEY'),model:Deno.env.get('OPENAI_TITLE_MODEL')});
+      return await generateAiTitles(input,titleServiceConfiguration(name=>Deno.env.get(name)));
     } catch (cause) {
       if (cause instanceof TitleServiceError) throw new ImportError(cause.status,cause.code,'AI 제목 추천을 완료하지 못했어요.');
       throw cause;

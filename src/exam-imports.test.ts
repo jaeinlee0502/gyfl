@@ -67,7 +67,7 @@ describe('관리자 PDF 업로드와 검수 자료 등록', () => {
     expect(await imports.suggestTitles(importId, '국어', items, '1번 해설')).toEqual([{ clientId: firstId, title: '본문의 구체적인 개념' }])
     expect(mocks.invoke).toHaveBeenCalledWith('exam-admin', { body: { action: 'suggest-titles', id: importId, subject: '국어', questions: items, explanationText: '1번 해설' } })
     mocks.invoke.mockResolvedValueOnce({ data: null, error: { context: new Response(JSON.stringify({ code: 'AI_RATE_LIMITED' }), { status: 429 }) } })
-    await expect(imports.suggestTitles(importId, '국어', items)).rejects.toThrow('OpenAI API의 요청량 제한')
+    await expect(imports.suggestTitles(importId, '국어', items)).rejects.toThrow('AI API의 요청량 제한')
     mocks.invoke.mockResolvedValueOnce({ data: null, error: { context: new Response(JSON.stringify({ code: 'AI_QUOTA_EXCEEDED' }), { status: 429 }) } })
     await expect(imports.suggestTitles(importId, '국어', items)).rejects.toThrow('사용 가능 크레딧 또는 사용 한도가 부족')
     expect(mocks.upload).not.toHaveBeenCalled()

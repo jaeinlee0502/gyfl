@@ -847,7 +847,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
           <p class="import-small">제목은 문제의 개념·주제·출제 내용을 짧게 요약해 추천합니다. 직접 쓴 제목은 자동으로 바꾸지 않으며, 추천 내용을 확인한 뒤 적용할 수 있어요.</p>
           <section class="import-explanation" aria-labelledby="import-ai-title">
             <h4 id="import-ai-title">AI로 키워드를 담은 제목 추천</h4>
-            <p class="import-small">‘AI 일괄 추천’ 또는 문항별 ‘AI 제목 제안’을 누르면 문제 본문·공통 지문을 OpenAI로 보내 제목을 추천합니다. 해설지는 선택 사항이며, 첨부하면 같은 번호의 해설도 함께 참고합니다. 기존 제목은 추천을 확인하고 적용할 때 바뀝니다.</p>
+            <p class="import-small">‘AI 일괄 추천’ 또는 문항별 ‘AI 제목 제안’을 누르면 연결된 AI 서비스(Gemini 또는 OpenAI)로 문제 본문·공통 지문을 보내 제목을 추천합니다. 해설지는 선택 사항이며, 첨부하면 같은 번호의 해설도 함께 참고합니다. 기존 제목은 추천을 확인하고 적용할 때 바뀝니다.</p>
             <div class="import-file-row"><label class="import-file-field">해설지 PDF (선택)<input class="import-explanation-input" type="file" accept="application/pdf,.pdf" :disabled="busy" @change="chooseExplanation"></label><button v-if="explanationName" class="import-secondary" :disabled="busy" @click="clearExplanation">해설지 연결 해제</button></div>
             <p v-if="explanationName" class="import-small">{{ explanationName }} · AI 제목 추천에만 사용하며 초안이나 서버 저장소에는 보관하지 않습니다. 다음에 창을 열면 다시 첨부해 주세요.</p>
             <p v-if="explanationMismatch" class="import-message is-error" role="alert">해설지와 시험 정보가 달라요. 같은 회차의 해설지를 선택하거나 연결을 해제해 주세요.</p>

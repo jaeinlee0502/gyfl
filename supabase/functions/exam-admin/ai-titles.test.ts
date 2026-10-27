@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
-import { generateAiTitles, type TitleRequest } from './ai-titles';
+import { generateAiTitles, titleServiceConfiguration, type TitleRequest } from './ai-titles';
 
 const input: TitleRequest = { subject: '통합사회', explanationText: '2번 해설: 기후가 주민 생활에 미치는 영향을 비교한다.',
   questions: [{ clientId: 'question-2', number: 2, text: '기온과 두 지역의 생활 모습을 비교하시오.', passageText: '', instruction: '', tags: ['지리'] }] };
@@ -60,5 +60,69 @@ describe('서버의 OpenAI 제목 추천', () => {
     const fetcher = vi.fn().mockResolvedValue(Response.json({ error: { code: 'insufficient_quota', message: 'private details' } }, { status: 429 }));
     await expect(generateAiTitles(input, { apiKey: 'test-key', fetcher }))
       .rejects.toMatchObject({ code: 'AI_QUOTA_EXCEEDED', status: 429 });
+  });
+});
+
+describe('서버의 Gemini 제목 추천', () => {
+  it('Gemini를 명시하면 Gemini 키와 모델만 선택하고 기존 OpenAI 키를 사용하지 않는다', () => {
+    const secrets: Record<string, string> = { AI_TITLE_PROVIDER: ' Gemini ', GEMINI_API_KEY: 'gemini-key',
+      GEMINI_TITLE_MODEL: 'gemini-custom-model', OPENAI_API_KEY: 'openai-key', OPENAI_TITLE_MODEL: 'openai-model' };
+    expect(titleServiceConfiguration(name => secrets[name])).toEqual({ provider: 'gemini', apiKey: 'gemini-key', model: 'gemini-custom-model' });
+    delete secrets.GEMINI_API_KEY;
+    expect(titleServiceConfiguration(name => secrets[name]).apiKey).toBeUndefined();
+    delete secrets.AI_TITLE_PROVIDER;
+    expect(titleServiceConfiguration(name => secrets[name])).toEqual({ provider: 'openai', apiKey: 'openai-key', model: 'openai-model' });
+  });
+
+  it('Gemini의 구조화된 출력으로 같은 문항·해설을 보내고 검증한 제목만 반환한다', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response([{ clientId: 'question-2', title: '기후와 지역별 생활 모습 비교' }]));
+    expect(await generateAiTitles(input, { provider: 'gemini', apiKey: 'gemini-key', fetcher }))
+      .toEqual([{ clientId: 'question-2', title: '기후와 지역별 생활 모습 비교' }]);
+    const [url, options] = fetcher.mock.calls[0]!;
+    const body = JSON.parse(options.body);
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+    expect(options.headers.Authorization).toBe('Bearer gemini-key');
+    expect(body.model).toBe('gemini-3.5-flash-lite');
+    expect(body.max_tokens).toBe(2500);
+    expect(body.reasoning_effort).toBe('minimal');
+    expect(body).not.toHaveProperty('store');
+    expect(body.response_format.json_schema.strict).toBe(true);
+    expect(JSON.parse(body.messages[1].content)).toEqual(input);
+    expect(body.messages[0].content).toContain('태그는 이전의 자동 추천으로 오분류될 수 있으므로');
+    expect(body.messages[0].content).toContain('선택지에만 등장하는 시대·인물·제도는 제목의 근거로 사용하지 않는다');
+    expect(options.body).not.toContain('gemini-key');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('서비스 선택이나 키 설정이 잘못되면 외부 요청 없이 실패한다', async () => {
+    const fetcher = vi.fn();
+    expect(() => titleServiceConfiguration(() => 'other-service')).toThrow('AI_INVALID_PROVIDER');
+    await expect(generateAiTitles(input, { provider: 'other-service', apiKey: 'test-key', fetcher }))
+      .rejects.toMatchObject({ code: 'AI_INVALID_PROVIDER' });
+    await expect(generateAiTitles(input, { provider: 'gemini', fetcher })).rejects.toMatchObject({ code: 'AI_NOT_CONFIGURED' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [400, { error: { details: [{ reason: 'API_KEY_INVALID' }] } }, 'AI_INVALID_KEY'],
+    [400, { error: { details: [{ reason: 'API_KEY_EXPIRED' }] } }, 'AI_INVALID_KEY'],
+    [403, { error: { status: 'PERMISSION_DENIED' } }, 'AI_ACCESS_DENIED'],
+    [404, { error: { status: 'NOT_FOUND' } }, 'AI_MODEL_UNAVAILABLE'],
+    [400, { error: { status: 'INVALID_ARGUMENT' } }, 'AI_REQUEST_REJECTED'],
+    [429, { error: { details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }] } }, 'AI_QUOTA_EXCEEDED'],
+    [429, { error: { details: [{ violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' }] }] } }, 'AI_RATE_LIMITED'],
+  ])('Gemini HTTP %s 오류를 구분하고 다른 서비스로 재시도하지 않는다', async (status, problem, code) => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json(problem, { status }));
+    await expect(generateAiTitles(input, { provider: 'gemini', apiKey: 'gemini-key', fetcher })).rejects.toMatchObject({ code });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('Gemini가 식별자를 바꾸거나 응답이 잘려도 기존 제목을 교체할 결과로 반환하지 않는다', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(response([{ clientId: 'other', title: '기후와 생활 모습' }]))
+      .mockResolvedValueOnce(response([{ clientId: 'question-2', title: '기후와 생활 모습' }], 'length'));
+    for (let i = 0; i < 2; i++) {
+      await expect(generateAiTitles(input, { provider: 'gemini', apiKey: 'gemini-key', fetcher }))
+        .rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
+    }
   });
 });
