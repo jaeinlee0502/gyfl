@@ -45,7 +45,7 @@ beforeAll(async () => {
     grant select, insert, update, delete on storage.objects to authenticated;
     grant all on storage.objects, storage.buckets to service_role;
   `);
-  for (const file of ['202610250001_accounts_and_bookmarks.sql', '202610250002_school_library.sql']) {
+  for (const file of ['202610250001_accounts_and_bookmarks.sql', '202610250002_school_library.sql', '202610270001_shared_question_tags.sql']) {
     await db.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8'));
   }
 }, 20000);
@@ -69,6 +69,68 @@ beforeEach(async () => {
 });
 
 afterAll(async () => { await db?.close(); });
+
+describe('교직원 공유 태그의 실제 PostgreSQL 권한과 충돌 처리', () => {
+  const update = (tags: unknown, expected: unknown = ['현대사'], id = 'school-test-1') =>
+    db.query<{ result: { id: string; tags: string[] } }>('select public.update_exam_question_tags($1,$2,$3) as result', [id, expected, tags]);
+
+  it('승인된 일반 교사가 태그만 변경하고 다른 승인 계정도 같은 태그를 읽는다', async () => {
+    await asUser(member);
+    expect((await update([' 현대사 ', '정치사', '현대사', '6월  민주 항쟁'])).rows[0]!.result.tags)
+      .toEqual(['현대사', '정치사', '6월 민주 항쟁']);
+    await asUser(admin);
+    expect((await db.query('select title,tags from public.exam_questions')).rows).toEqual([{ title: '검증용 문항', tags: ['현대사', '정치사', '6월 민주 항쟁'] }]);
+    await db.exec('reset role');
+    expect((await db.query('select actor_user_id,old_tags,new_tags from public.exam_question_tag_audit')).rows)
+      .toEqual([{ actor_user_id: member, old_tags: ['현대사'], new_tags: ['현대사', '정치사', '6월 민주 항쟁'] }]);
+  });
+
+  it('비로그인·승인 대기·승인 취소 계정은 공유 태그를 변경하지 못한다', async () => {
+    await asUser('', 'anon');
+    await expect(update(['정치사'])).rejects.toThrow(/permission denied/);
+    await asUser(pending);
+    await expect(update(['정치사'])).rejects.toThrow('SCHOOL_ACCESS_REQUIRED');
+    await db.exec('reset role');
+    await db.query('delete from public.school_members where user_id=$1', [member]);
+    await asUser(member);
+    await expect(update(['정치사'])).rejects.toThrow('SCHOOL_ACCESS_REQUIRED');
+  });
+
+  it('잘못된 태그·과도한 개수·null을 거절하고 아무것도 변경하지 않는다', async () => {
+    await asUser(member);
+    for (const tags of [null, [''], ['\t\n '], [null], ['가'.repeat(61)], Array(21).fill('현대사'), [['현대사']]]) {
+      await expect(update(tags)).rejects.toThrow('INVALID_QUESTION_TAGS');
+    }
+    expect((await db.query('select tags from public.exam_questions')).rows).toEqual([{ tags: ['현대사'] }]);
+  });
+
+  it('다른 선생님의 변경을 감지하고 오래된 편집으로 덮어쓰지 않는다', async () => {
+    await asUser(member);
+    await update(['현대사', '정치사']);
+    await asUser(admin);
+    await expect(update(['문화사'])).rejects.toThrow('QUESTION_TAGS_CONFLICT');
+    expect((await db.query('select tags from public.exam_questions')).rows).toEqual([{ tags: ['현대사', '정치사'] }]);
+    await db.exec('reset role');
+    expect((await db.query('select count(*)::int as count from public.exam_question_tag_audit')).rows).toEqual([{ count: 1 }]);
+  });
+
+  it('빈 목록으로 태그를 지울 수 있고 변경이 없는 저장은 이력을 늘리지 않는다', async () => {
+    await asUser(member);
+    await update(['현대사']);
+    await db.exec('reset role');
+    expect((await db.query('select count(*)::int as count from public.exam_question_tag_audit')).rows).toEqual([{ count: 0 }]);
+    await asUser(member);
+    expect((await update([])).rows[0]!.result.tags).toEqual([]);
+    await expect(update([], [], 'not-a-question')).rejects.toThrow('QUESTION_NOT_FOUND');
+  });
+
+  it('태그 RPC가 생겨도 제목·원문·변경 이력에 대한 직접 쓰기는 허용하지 않는다', async () => {
+    await asUser(member);
+    for (const sql of ["update public.exam_questions set title='임의 수정'", 'select * from public.exam_question_tag_audit', "insert into public.exam_question_tag_audit(question_id,old_tags,new_tags) values('school-test-1','{}','{}')"]) {
+      await expect(db.query(sql)).rejects.toThrow(/permission denied/);
+    }
+  });
+});
 
 describe('학교 승인과 문항 원문 접근의 실제 PostgreSQL RLS', () => {
   it('비로그인 사용자는 문항과 회원 정보를 조회하지 못하고 이미지 목록도 볼 수 없다', async () => {

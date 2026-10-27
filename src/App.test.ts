@@ -30,6 +30,11 @@ function createLibrary() {
   const questionItems = ref<Question[]>([])
   return {
     questionItems, loading: ref(false), error: ref(''),
+    updateQuestionTags: vi.fn(async (id: string, _expected: string[], tags: string[]) => {
+      questionItems.value = questionItems.value.map(q => q.id === id ? { ...q, tags: [...tags] } : q)
+      return tags
+    }),
+    loadQuestionTags: vi.fn(async (id: string) => questionItems.value.find(q => q.id === id)!.tags),
     loadQuestions: vi.fn(async () => { questionItems.value = [...records] }),
     clearQuestions: vi.fn(() => { questionItems.value = [] }),
   }
@@ -60,6 +65,41 @@ beforeEach(() => {
 })
 
 describe('학교 서재 입장과 문제 탐색', () => {
+  it('관리자가 아닌 승인 교사도 태그를 수정하고 새 태그로 바로 검색한다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    expect(account.isAdmin.value).toBe(false)
+    expect(wrapper.findAll('.question-tag-edit')).toHaveLength(3)
+    await wrapper.findAll('.question-tag-edit')[0]!.trigger('click'); await flushPromises()
+    await vi.waitFor(() => expect(wrapper.find('.question-tags-dialog').exists()).toBe(true))
+    const editor = wrapper.get('.question-tags-dialog')
+    expect(editor.text()).toContain('모든 선생님에게 공유')
+    await editor.get('textarea').setValue('현대사, 수업 분류')
+    await editor.get('form').trigger('submit'); await flushPromises()
+    expect(library.updateQuestionTags).toHaveBeenCalledWith('exam-21', ['현대사', '정치사'], ['현대사', '수업 분류'])
+    expect(wrapper.find('.question-tags-dialog').exists()).toBe(false)
+    const customTag = wrapper.findAll('.tags button').find(button => button.text().includes('수업 분류'))!
+    expect(customTag.text()).toContain('1')
+    await customTag.trigger('click')
+    expect(wrapper.findAll('.question-card')).toHaveLength(1)
+    expect(wrapper.get('.exam-question-title').text()).toContain('민주주의의 변화')
+    wrapper.unmount()
+  })
+
+  it('승인이 사라지거나 계정이 바뀌면 태그 편집창도 닫는다', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    await wrapper.findAll('.question-tag-edit')[0]!.trigger('click'); await flushPromises()
+    await vi.waitFor(() => expect(wrapper.find('.question-tags-dialog').exists()).toBe(true))
+    expect(wrapper.find('.question-tags-dialog').exists()).toBe(true)
+    account.user.value = { ...teacher, id: 'another-teacher' }
+    await flushPromises()
+    expect(wrapper.find('.question-tags-dialog').exists()).toBe(false)
+    account.isSchoolMember.value = false; await flushPromises()
+    expect(wrapper.find('.question-tag-edit').exists()).toBe(false)
+    expect(library.updateQuestionTags).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
   it('등록 순서와 관계없이 같은 시험의 문항을 번호순으로 표시한다', async () => {
     const wrapper = mount(App)
     await flushPromises()

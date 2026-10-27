@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ArrowUpRight, Bookmark, Check, ChevronDown } from 'lucide-vue-next'
+import { ArrowUpRight, Bookmark, Check, ChevronDown, Pencil } from 'lucide-vue-next'
 import type { Question } from '../data'
 
-defineProps<{ question: Question; saved: boolean; disabled: boolean; pending: boolean; answerOpen: boolean; related?: boolean }>()
+defineProps<{ question: Question; saved: boolean; disabled: boolean; pending: boolean; answerOpen: boolean; related?: boolean; canEditTags?: boolean }>()
 const emit = defineEmits<{
-  save: [id: string]; answer: [id: string]; tag: [tag: string]; image: [question: Question]
+  save: [id: string]; answer: [id: string]; tag: [tag: string]; image: [question: Question]; editTags: [question: Question]
 }>()
 </script>
 
@@ -30,6 +30,7 @@ const emit = defineEmits<{
     </div>
     <div class="question-footer">
       <div class="question-tags"><button v-for="tag in question.tags" :key="tag" @click="emit('tag', tag)">#{{ tag }}</button></div>
+      <button v-if="canEditTags && question.kind === 'exam'" type="button" class="question-tag-edit" :aria-label="`${question.number}번 문제 태그 편집`" @click="emit('editTags', question)"><Pencil :size="15" /> 태그 편집</button>
       <a v-if="question.kind === 'exam' && question.explanationUrl" class="answer-button external-explanation" :href="question.explanationUrl" target="_blank" rel="noopener noreferrer">정답·해설 EBS에서 보기 <ArrowUpRight :size="15" /></a>
       <button v-else-if="question.kind === 'demo'" class="answer-button" :aria-expanded="answerOpen" :aria-controls="`answer-${question.id}`" @click="emit('answer', question.id)">{{ answerOpen ? '정답·해설 접기' : '정답·해설 보기' }}<ChevronDown :size="15" :class="{ rotated: answerOpen }" /></button>
     </div>

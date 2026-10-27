@@ -1,0 +1,24 @@
+.question-tags-dialog { border: 0; border-radius: 16px; padding: 0; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); color: #2c4035; box-shadow: 0 20px 70px #20362b33; }
+.question-tags-dialog::backdrop { background: #14291e80; }
+.question-tags-panel { padding: 24px; }
+.question-tags-panel header, .question-tags-panel footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.question-tags-panel header h2 { font-size: 1.25rem; margin: 0; }
+.question-tags-panel p { line-height: 1.65; }
+.tag-question-info, .tag-editor-hint { color: #63786a; font-size: .875rem; }
+.question-tag-input { display: grid; gap: 8px; font-weight: 600; }
+.question-tag-input textarea { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #cbd9cd; border-radius: 8px; font: inherit; font-weight: 400; resize: vertical; min-height: 90px; }
+.question-tag-presets { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0; }
+.question-tag-presets button { border: 1px solid #d6e1d7; padding: 7px 10px; border-radius: 6px; min-height: 36px; color: #506b57; background: #f4f8f3; }
+.question-tag-presets button.selected { background: #e2f0e6; border-color: #538269; color: #27614a; }
+.question-tags-panel footer { justify-content: flex-end; margin-top: 24px; }
+.question-tags-panel footer button, .tag-editor-conflict button { border: 1px solid #cbd9cd; border-radius: 8px; padding: 10px 16px; min-height: 42px; }
+.tag-editor-save { background: #2e7056; color: #fff; }
+.tag-editor-cancel, .tag-editor-conflict button { background: #fff; color: #3c5b45; }
+.question-tags-panel button:disabled { opacity: .5; cursor: not-allowed; }
+.tag-editor-error { color: #a23f31; }
+.tag-editor-conflict { padding: 12px; background: #f9f5e9; border-radius: 8px; }
+.tag-editor-conflict p { margin-top: 0; }
+.question-tag-edit { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; font-size: .875rem; color: #426c52; padding: 4px 7px; }
+.question-tag-presets button, .question-tags button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.filter-panel .tags button { max-width: 100%; white-space: normal; }
+.filter-panel .tags .tag-label { min-width: 0; overflow-wrap: anywhere; text-align: left; }

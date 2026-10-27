@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { subjects, type ExamPassage, type Question, type Subject } from './data'
 import { supabase } from './lib/supabase'
+import { normalizeQuestionTags, QuestionTagsConflictError } from './tag-editing'
 
 interface ExamRecord {
   id: string; subject: string; grade: number; year: number; month: number;
@@ -167,5 +168,44 @@ export function useQuestionLibrary() {
     }
   }
 
-  return { questionItems, loading, error, loadQuestions, clearQuestions }
+  function applyTags(id: string, tags: unknown) {
+    if (!Array.isArray(tags) || tags.some(tag => typeof tag !== 'string')) throw new Error('태그 응답을 확인하지 못했어요. 다시 불러와 주세요.')
+    const clean = normalizeQuestionTags(tags)
+    const question = questionItems.value.find(question => question.id === id)
+    if (!question) throw new Error('문제를 찾지 못했어요. 다시 불러와 주세요.')
+    question.tags = clean
+    questionItems.value = [...questionItems.value]
+    return clean
+  }
+
+  async function updateQuestionTags(id: string, expectedTags: string[], tags: string[]) {
+    const current = version
+    const client = supabase
+    if (!client || !questionItems.value.some(question => question.id === id && question.kind === 'exam')) {
+      throw new Error('문제를 다시 불러온 뒤 태그를 수정해 주세요.')
+    }
+    const cleaned = normalizeQuestionTags(tags)
+    const result = await client.rpc('update_exam_question_tags', { p_question_id: id, p_expected_tags: [...expectedTags], p_tags: cleaned })
+    if (current !== version) throw new Error('로그인 상태나 문제 목록이 바뀌었어요. 다시 시도해 주세요.')
+    if (result.error) {
+      if (result.error.message?.includes('QUESTION_TAGS_CONFLICT')) throw new QuestionTagsConflictError()
+      if (result.error.message?.includes('SCHOOL_ACCESS_REQUIRED')) throw new Error('학교 이용 승인을 받은 계정으로 다시 로그인해 주세요.')
+      if (result.error.message?.includes('INVALID_QUESTION_TAGS')) throw new Error('태그 개수와 길이를 확인해 주세요. 최대 20개, 각각 60자까지 입력할 수 있어요.')
+      if (result.error.message?.includes('QUESTION_NOT_FOUND')) throw new Error('문제가 삭제되었거나 더 이상 표시되지 않아요. 문제 목록을 다시 불러와 주세요.')
+      throw new Error('태그를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.')
+    }
+    if (result.data?.id !== id) throw new Error('태그 저장 결과를 확인하지 못했어요. 최신 태그를 다시 불러와 주세요.')
+    return applyTags(id, result.data.tags)
+  }
+
+  async function loadQuestionTags(id: string) {
+    const current = version
+    if (!supabase) throw new Error('학교 서재 연결을 확인해 주세요.')
+    const result = await supabase.from('exam_questions').select('id,tags').eq('id', id).maybeSingle()
+    if (current !== version) throw new Error('로그인 상태나 문제 목록이 바뀌었어요. 다시 시도해 주세요.')
+    if (result.error || result.data?.id !== id) throw new Error('최신 태그를 불러오지 못했어요. 학교 이용 승인과 문제 목록을 확인해 주세요.')
+    return applyTags(id, result.data.tags)
+  }
+
+  return { questionItems, loading, error, loadQuestions, clearQuestions, updateQuestionTags, loadQuestionTags }
 }

@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  rpc: vi.fn(), from: vi.fn(), range: vi.fn(), passageIn: vi.fn(), storageFrom: vi.fn(), download: vi.fn(),
+  rpc: vi.fn(), from: vi.fn(), range: vi.fn(), passageIn: vi.fn(), storageFrom: vi.fn(), download: vi.fn(), maybeSingle: vi.fn(),
 }))
 vi.mock('./lib/supabase', () => ({
   supabase: { rpc: mocks.rpc, from: mocks.from, storage: { from: mocks.storageFrom } },
 }))
 import { useQuestionLibrary } from './questions'
+import { QuestionTagsConflictError } from './tag-editing'
 
 const exam = (number = 1) => ({
   id: `exam-history-${number}`, subject: '한국사', grade: 1, year: 2025, month: 3,
@@ -19,7 +20,7 @@ const exam = (number = 1) => ({
 beforeEach(() => {
   vi.resetAllMocks()
   mocks.rpc.mockResolvedValue({ data: true, error: null })
-  const builder = { select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: mocks.range }
+  const builder = { select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: mocks.range, eq: vi.fn().mockReturnThis(), maybeSingle: mocks.maybeSingle }
   const passageBuilder = { select: vi.fn().mockReturnThis(), in: mocks.passageIn }
   mocks.from.mockImplementation(table => table === 'exam_passages' ? passageBuilder : builder)
   mocks.passageIn.mockResolvedValue({ data: [], error: null })
@@ -33,6 +34,58 @@ beforeEach(() => {
 })
 
 describe('학교 전용 문항 불러오기', () => {
+  it('태그 충돌 뒤 최신 태그만 다시 읽고 이미지를 재요청하지 않는다', async () => {
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    mocks.maybeSingle.mockResolvedValueOnce({ data: { id: exam().id, tags: ['현대사', '경제사'] }, error: null })
+    expect(await library.loadQuestionTags(exam().id)).toEqual(['현대사', '경제사'])
+    expect(library.questionItems.value[0]!.tags).toEqual(['현대사', '경제사'])
+    expect(mocks.download).toHaveBeenCalledOnce()
+    library.clearQuestions()
+  })
+  it('공유 태그 저장 결과를 반영하면서 기존 문제 이미지는 유지한다', async () => {
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    mocks.rpc.mockResolvedValueOnce({ data: { id: exam().id, tags: ['현대사', '수업 분류'] }, error: null })
+    expect(await library.updateQuestionTags(exam().id, ['현대사'], ['현대사', ' 수업  분류 '])).toEqual(['현대사', '수업 분류'])
+    expect(mocks.rpc).toHaveBeenLastCalledWith('update_exam_question_tags', { p_question_id: exam().id, p_expected_tags: ['현대사'], p_tags: ['현대사', '수업 분류'] })
+    expect(library.questionItems.value[0]).toMatchObject({ tags: ['현대사', '수업 분류'], imageUrl: 'blob:private-question' })
+    expect(mocks.download).toHaveBeenCalledOnce()
+    library.clearQuestions()
+  })
+
+  it('동시 수정 충돌이나 승인 취소는 기존 태그를 바꾸지 않고 안내한다', async () => {
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { message: 'QUESTION_TAGS_CONFLICT' } })
+    await expect(library.updateQuestionTags(exam().id, ['현대사'], ['정치사'])).rejects.toBeInstanceOf(QuestionTagsConflictError)
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { message: 'SCHOOL_ACCESS_REQUIRED' } })
+    await expect(library.updateQuestionTags(exam().id, ['현대사'], ['정치사'])).rejects.toThrow('학교 이용 승인')
+    expect(library.questionItems.value[0]!.tags).toEqual(['현대사'])
+    library.clearQuestions()
+  })
+
+  it('계정 변경이나 다시 불러오기 후 늦게 온 저장 결과를 적용하지 않는다', async () => {
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    let finish!: (result: unknown) => void
+    mocks.rpc.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const pending = library.updateQuestionTags(exam().id, ['현대사'], ['정치사'])
+    library.clearQuestions()
+    finish({ data: { id: exam().id, tags: ['정치사'] }, error: null })
+    await expect(pending).rejects.toThrow('로그인 상태나 문제 목록')
+    expect(library.questionItems.value).toEqual([])
+  })
+
+  it('태그 개수·길이를 확인한 뒤에만 저장 요청을 보낸다', async () => {
+    const library = useQuestionLibrary()
+    await library.loadQuestions()
+    mocks.rpc.mockClear()
+    await expect(library.updateQuestionTags(exam().id, ['현대사'], Array(21).fill('태그'))).rejects.toThrow('20개')
+    await expect(library.updateQuestionTags(exam().id, ['현대사'], ['가'.repeat(61)])).rejects.toThrow('60자')
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    library.clearQuestions()
+  })
   it('서버의 이용 승인 확인이 실패하면 문제나 파일을 요청하지 않는다', async () => {
     mocks.rpc.mockResolvedValue({ data: false, error: null })
     const library = useQuestionLibrary()

@@ -5,6 +5,7 @@ import { subjects, type ExamPassage, type ExamPassageImage, type Question, type 
 import { useQuestionLibrary } from './questions'
 import LibraryQuestionCard from './components/LibraryQuestionCard.vue'
 import './library-passages.css'
+import './tag-editing.css'
 import SchoolEntrance from './components/SchoolEntrance.vue'
 import AccountDialog from './components/AccountDialog.vue'
 import AdminDialog from './components/AdminDialog.vue'
@@ -13,6 +14,7 @@ import { useBookmarks } from './bookmarks'
 
 const ExamImportDialog = defineAsyncComponent(() => import('./components/ExamImportDialog.vue'))
 const QuestionImageDialog = defineAsyncComponent(() => import('./components/QuestionImageDialog.vue'))
+const QuestionTagsDialog = defineAsyncComponent(() => import('./components/QuestionTagsDialog.vue'))
 const rightsNotice = '문항 원문의 저작권은 각 출제·제공기관 및 해당 권리자에게 있으며, 본 사이트는 출처 정보와 학습용 메타데이터를 함께 제공합니다.'
 const subjectNavLabels: Record<Subject, string> = {
   국어: '국어 영역', 수학: '수학 영역', 영어: '영어 영역', 한국사: '한국사 영역',
@@ -35,11 +37,12 @@ const adminOpen = ref(false)
 const importOpen = ref(false)
 const importNotice = ref('')
 const selectedImage = ref<{ src: string; alt: string; width?: number; height?: number } | null>(null)
+const selectedTagQuestion = ref<Question | null>(null)
 const expandedPassages = ref<string[]>([])
 const importConfirm = ref(false)
 const answers = ref<string[]>([])
 const { user, authReady, authBusy, isAdmin, isSchoolMember, accessReady, recoveryMode, recoveryLinkError, authNotice, refreshSchoolAccess, signOut } = useAccount()
-const { questionItems, loading: questionsLoading, error: questionsError, loadQuestions, clearQuestions } = useQuestionLibrary()
+const { questionItems, loading: questionsLoading, error: questionsError, loadQuestions, clearQuestions, updateQuestionTags, loadQuestionTags } = useQuestionLibrary()
 const canEnter = computed(() => Boolean(authReady.value && accessReady.value && user.value && (isSchoolMember.value || isAdmin.value)))
 const { saved, guestToImport, loading: savedLoading, loadFailed, disabled: savesDisabled, pending: pendingSaves, importing, message: storageMessage, toggleSaved, importGuestSaved, reloadSaved } = useBookmarks()
 const accountError = ref('')
@@ -47,11 +50,13 @@ function checkAccessOnFocus() { if (user.value) void refreshSchoolAccess() }
 onMounted(() => { void initializeAccount(); window.addEventListener('focus', checkAccessOnFocus) })
 onBeforeUnmount(() => { window.removeEventListener('focus', checkAccessOnFocus); clearQuestions() })
 watch([() => user.value?.id, canEnter], ([, allowed]) => {
+  selectedTagQuestion.value = null
   answers.value = []; sidebarOpen.value = false
   if (allowed) void loadQuestions()
   else { clearQuestions(); selectedImage.value = null; adminOpen.value = false; importOpen.value = false; helpOpen.value = false; importConfirm.value = false; importNotice.value = '' }
 }, { immediate: true, flush: 'sync' })
 watch(questionItems, items => {
+  if (selectedTagQuestion.value && !items.some(q => q.id === selectedTagQuestion.value?.id)) selectedTagQuestion.value = null
   if (selectedImage.value && !items.some(q => q.imageUrl === selectedImage.value?.src
     || q.sharedPassage?.images.some(image => image.imageUrl === selectedImage.value?.src))) selectedImage.value = null
 }, { flush: 'sync' })
@@ -64,6 +69,12 @@ async function logout() {
 }
 async function confirmImport() { await importGuestSaved(); importConfirm.value = false }
 const current = computed(() => subjects.find(s => s.name === subject.value)!)
+function tagsForSubject(name: Subject) {
+  return [...new Set([...(subjects.find(s => s.name === name)?.tags ?? []),
+    ...questionItems.value.filter(q => q.subject === name).flatMap(q => q.tags)])]
+}
+const availableTags = computed(() => tagsForSubject(subject.value))
+function onTagsSaved() { selectedTagQuestion.value = null; importNotice.value = '태그를 저장했어요. 모든 선생님이 같은 태그로 문제를 찾을 수 있어요.' }
 const matchingQuestions = computed(() => questionItems.value.filter(q =>
   q.subject === subject.value &&
   (grade.value === 'all' || q.grade === Number(grade.value)) &&
@@ -181,7 +192,7 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
           <div class="filter-panel">
             <div class="search-row"><label class="search-box"><Search :size="19" /><input v-model="query" placeholder="키워드나 문제 내용으로 검색해 보세요" aria-label="문제 검색"><button v-if="query" class="icon-button" aria-label="검색어 지우기" @click="query = ''"><X :size="15" /></button><span v-else class="search-hint"># 키워드 검색</span></label><button class="filter-reset" :disabled="!activeFilters" @click="reset"><SlidersHorizontal :size="17" /> 필터 초기화</button></div>
             <div class="select-row"><span class="filter-label"><ListFilter :size="15" /> 상세 조건</span><label><span class="sr-only">학년</span><select v-model="grade"><option value="all">전체 학년</option><option value="1">고1</option><option value="2">고2</option></select><ChevronDown :size="13" /></label><label><span class="sr-only">시행 연도</span><select v-model="year"><option value="all">전체 연도</option><option value="2026">2026년</option><option value="2025">2025년</option></select><ChevronDown :size="13" /></label><label><span class="sr-only">시행월</span><select v-model="month"><option value="all">전체 시행월</option><option value="3">3월</option><option value="6">6월</option><option value="9">9월</option><option value="10">10월</option></select><ChevronDown :size="13" /></label><span class="filter-separator"></span><button class="saved-filter" :class="{ enabled: savedOnly }" :aria-pressed="savedOnly" @click="savedOnly = !savedOnly"><Bookmark :size="14" /> 저장한 문제만</button></div>
-            <div class="tags-row"><span class="filter-label">추천 키워드</span><div class="tags" :aria-busy="questionsLoading"><button :class="{ 'tag-active': !tag }" :aria-pressed="!tag" :aria-label="countLabel('전체', matchingQuestions.length)" @click="tag = ''">전체<span class="tag-count" aria-hidden="true">{{ countText(matchingQuestions.length) }}</span></button><button v-for="t in current.tags" :key="t" :class="{ 'tag-active': tag === t }" :aria-pressed="tag === t" :aria-label="countLabel(t, tagCounts.get(t) ?? 0)" @click="tag = tag === t ? '' : t"><span class="tag-label"><span class="tag-prefix">#</span> {{ t }}</span><span class="tag-count" aria-hidden="true">{{ countText(tagCounts.get(t) ?? 0) }}</span></button></div></div>
+            <div class="tags-row"><span class="filter-label">추천 키워드</span><div class="tags" :aria-busy="questionsLoading"><button :class="{ 'tag-active': !tag }" :aria-pressed="!tag" :aria-label="countLabel('전체', matchingQuestions.length)" @click="tag = ''">전체<span class="tag-count" aria-hidden="true">{{ countText(matchingQuestions.length) }}</span></button><button v-for="t in availableTags" :key="t" :class="{ 'tag-active': tag === t }" :aria-pressed="tag === t" :aria-label="countLabel(t, tagCounts.get(t) ?? 0)" @click="tag = tag === t ? '' : t"><span class="tag-label"><span class="tag-prefix">#</span> {{ t }}</span><span class="tag-count" aria-hidden="true">{{ countText(tagCounts.get(t) ?? 0) }}</span></button></div></div>
           </div>
         </section>
 
@@ -203,7 +214,7 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
                 <p class="image-zoom-hint">공통 지문 이미지도 누르면 크게 볼 수 있어요.</p>
               </section>
               <button v-if="group.passage && group.all.length > group.matched.length" class="shared-passage-toggle" :aria-expanded="expandedPassages.includes(group.passage.id)" @click="togglePassage(group.passage.id)">{{ expandedPassages.includes(group.passage.id) ? `검색된 ${group.matched.length}문항만 보기` : `같은 지문의 전체 ${group.all.length}문항 보기` }}</button>
-              <LibraryQuestionCard v-for="q in group.shown" :key="q.id" :question="q" :saved="saved.includes(q.id)" :disabled="savesDisabled" :pending="pendingSaves.includes(q.id)" :answer-open="answers.includes(q.id)" :related="!group.matched.some(matched => matched.id === q.id)" @save="toggleSaved" @answer="toggleAnswer" @tag="tag = $event" @image="openQuestionImage" />
+              <LibraryQuestionCard v-for="q in group.shown" :key="q.id" :question="q" :saved="saved.includes(q.id)" :disabled="savesDisabled" :pending="pendingSaves.includes(q.id)" :answer-open="answers.includes(q.id)" :related="!group.matched.some(matched => matched.id === q.id)" :can-edit-tags="canEnter" @edit-tags="selectedTagQuestion = $event" @save="toggleSaved" @answer="toggleAnswer" @tag="tag = $event" @image="openQuestionImage" />
             </div>
             <div v-if="!filtered.length && !questionsLoading && !questionsError" class="empty-state"><Search :size="30" /><h3>{{ savedOnly && savedLoading ? '저장한 문제를 불러오고 있어요' : savedOnly && loadFailed ? '저장 목록을 불러오지 못했어요' : '조건에 맞는 문제가 없어요' }}</h3><p>다른 키워드를 선택하거나 검색 조건을 줄여 보세요.<br>아직 등록되지 않은 과목은 자료를 준비하고 있어요.</p><button @click="reset">검색 조건 초기화 <ArrowRight :size="15" /></button></div>
           </div>
@@ -215,8 +226,9 @@ function toggleAnswer(id: string) { answers.value = answers.value.includes(id) ?
     </div>
     <AdminDialog v-if="adminOpen && isAdmin && canEnter" @close="adminOpen = false" />
     <ExamImportDialog v-if="importOpen && isAdmin && canEnter" @close="importOpen = false" @published="onExamPublished" @changed="onExamImportsChanged" />
+    <QuestionTagsDialog v-if="selectedTagQuestion && canEnter" :key="selectedTagQuestion.id" :question="selectedTagQuestion" :suggested-tags="tagsForSubject(selectedTagQuestion.subject)" :save-tags="updateQuestionTags" :load-tags="loadQuestionTags" @close="selectedTagQuestion = null" @saved="onTagsSaved" />
     <QuestionImageDialog v-if="selectedImage && canEnter" :src="selectedImage.src" :alt="selectedImage.alt" :width="selectedImage.width" :height="selectedImage.height" @close="selectedImage = null" />
-    <div v-if="helpOpen" class="modal-backdrop" @click.self="helpOpen = false" @keydown.esc="helpOpen = false"><section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1"><button class="modal-close icon-button" aria-label="안내 닫기" autofocus @click="helpOpen = false"><X :size="21" /></button><span class="eyebrow">ABOUT THE ARCHIVE</span><h2 id="help-title">함께 만들어 가는 문제서재</h2><p>고양외고 교직원만 이용하는 학교 서재입니다. 회원가입 후 관리자 승인을 받아야 입장할 수 있습니다. 과목과 키워드로 필요한 문항을 찾아 수업 준비에 활용하세요.</p><h3>자료 수록 기준</h3><p>2022 개정 교육과정은 2025년 고1부터 적용되어, 2026년 기준 고1·고2가 적용 대상입니다. 학년과 시행 연도, 과목별 출제 범위를 확인해 문항을 분류합니다.</p><h3>태그는 함께 다듬어요</h3><p>제가 역사 전공이다 보니 다른 과목은 AI를 통해 임의로 태그를 넣었습니다. 선생님들께서 실제로 쓰시기 좋은 태그(#)를 알려주시면 추가하도록 하겠습니다.</p><h3>저장한 문제와 계정</h3><p>문항 오른쪽의 책갈피를 누르면 문제를 저장할 수 있습니다. 내 계정에 저장되어 다른 기기에서도 이어서 볼 수 있으며, ‘저장한 문제만’으로 모아 볼 수 있습니다. 이전에 이 브라우저에 저장한 목록은 본인 계정으로 가져올 수 있습니다. 공용 컴퓨터에서는 사용 후 로그아웃해 주세요.</p><h3>계정 찾기</h3><p>이메일을 로그인 아이디로 사용하며 별도의 인증 메일은 보내지 않습니다. 아이디나 비밀번호를 잊으셨다면 제작자에게 가입할 때 사용한 이름과 기억나는 아이디 정보를 알려주세요. 관리자가 본인 확인 후 임시 비밀번호를 발급해 드립니다. 임시 비밀번호로 로그인한 뒤 상단의 ‘비밀번호 변경’에서 새 비밀번호를 정해 주세요.</p><a href="https://www.ebsi.co.kr/ebs/xip/xipa/retrieveSCVMainInfo.ebs?irecord=202609022&targetCd=D200&cookieGradeVal=high2" target="_blank" rel="noopener noreferrer">EBS 공식 자료 페이지 <ArrowUpRight :size="15" /></a><p class="rights-notice">{{ rightsNotice }}</p><button class="modal-confirm" @click="helpOpen = false">확인했어요</button></section></div>
+    <div v-if="helpOpen" class="modal-backdrop" @click.self="helpOpen = false" @keydown.esc="helpOpen = false"><section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1"><button class="modal-close icon-button" aria-label="안내 닫기" autofocus @click="helpOpen = false"><X :size="21" /></button><span class="eyebrow">ABOUT THE ARCHIVE</span><h2 id="help-title">함께 만들어 가는 문제서재</h2><p>고양외고 교직원만 이용하는 학교 서재입니다. 회원가입 후 관리자 승인을 받아야 입장할 수 있습니다. 과목과 키워드로 필요한 문항을 찾아 수업 준비에 활용하세요.</p><h3>자료 수록 기준</h3><p>2022 개정 교육과정은 2025년 고1부터 적용되어, 2026년 기준 고1·고2가 적용 대상입니다. 학년과 시행 연도, 과목별 출제 범위를 확인해 문항을 분류합니다.</p><h3>태그는 함께 다듬어요</h3><p>학교 이용 승인을 받은 선생님은 문제 아래의 ‘태그 편집’에서 태그를 직접 추가·수정할 수 있습니다. 저장한 태그는 모든 선생님에게 공유되며 추천 키워드와 검색에 반영됩니다. 다른 선생님이 수정한 태그는 문제 목록을 새로 불러오면 확인할 수 있습니다.</p><h3>저장한 문제와 계정</h3><p>문항 오른쪽의 책갈피를 누르면 문제를 저장할 수 있습니다. 내 계정에 저장되어 다른 기기에서도 이어서 볼 수 있으며, ‘저장한 문제만’으로 모아 볼 수 있습니다. 이전에 이 브라우저에 저장한 목록은 본인 계정으로 가져올 수 있습니다. 공용 컴퓨터에서는 사용 후 로그아웃해 주세요.</p><h3>계정 찾기</h3><p>이메일을 로그인 아이디로 사용하며 별도의 인증 메일은 보내지 않습니다. 아이디나 비밀번호를 잊으셨다면 제작자에게 가입할 때 사용한 이름과 기억나는 아이디 정보를 알려주세요. 관리자가 본인 확인 후 임시 비밀번호를 발급해 드립니다. 임시 비밀번호로 로그인한 뒤 상단의 ‘비밀번호 변경’에서 새 비밀번호를 정해 주세요.</p><a href="https://www.ebsi.co.kr/ebs/xip/xipa/retrieveSCVMainInfo.ebs?irecord=202609022&targetCd=D200&cookieGradeVal=high2" target="_blank" rel="noopener noreferrer">EBS 공식 자료 페이지 <ArrowUpRight :size="15" /></a><p class="rights-notice">{{ rightsNotice }}</p><button class="modal-confirm" @click="helpOpen = false">확인했어요</button></section></div>
   </div>
   <AccountDialog v-if="authOpen" :mode="accountMode" @close="authOpen = false" />
 </template>
