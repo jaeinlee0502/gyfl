@@ -154,12 +154,16 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
   const metadata = inferExamMetadata(header)
   const warnings = ['자동 추출한 문항 영역과 태그는 초안입니다. 등록 전에 문제·보기·선택지가 모두 보이는지 확인해 주세요.']
   if (!metadata.subject || !metadata.grade || !metadata.year || !metadata.month) warnings.push('머리말에서 일부 시험 정보를 확인하지 못했어요. 과목·학년·연월을 직접 확인해 주세요.')
+  const lines = pages.flatMap(page => ([0, 1] as const).flatMap(column => columnLines(page, column)))
   const candidates: Anchor[] = []
-  for (const page of pages) for (const run of page.runs) {
-    const match = /^\s*(\d{1,2})\s*\.\s*(?:\D|$)/.exec(run.text)
-    if (!match || run.top < .06 || run.top > .91) continue
-    const column = run.left <= .22 ? 0 : run.left >= .44 && run.left <= .64 ? 1 : null
-    if (column !== null) candidates.push({ page: page.page, number: Number(match[1]), x: run.left, y: run.top, column })
+  // A PDF may store the number and its period in separate text items.
+  // Read their visual line together before matching a question number.
+  for (const line of lines) {
+    const match = /^\s*(\d{1,2})\s*\.\s*(?:\D|$)/.exec(line.text)
+    if (!match || line.y < .06 || line.y > .91) continue
+    if ((line.column === 0 && line.left <= .22) || (line.column === 1 && line.left >= .44 && line.left <= .64)) {
+      candidates.push({ page: line.page, number: Number(match[1]), x: line.left, y: line.y, column: line.column })
+    }
   }
   // Question numbers align; ignore numbered lists indented inside a passage.
   const columns = ([0, 1] as const).map(column => {
@@ -170,23 +174,27 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
   })
   const aligned = candidates.filter(a => columns[a.column] !== undefined && Math.abs(a.x - columns[a.column]!) < .009)
     .sort((a, b) => a.page - b.page || a.column - b.column || a.y - b.y)
-  // A sequential chain avoids treating an internal numbered list as questions.
-  const starts = aligned.map((a, i) => ({ a, i })).filter(({ a }) => a.number === 1)
+  // Keep the longest increasing sequence. A missing number must not discard
+  // every later question, while nested lists and repeated numbers stay out.
+  const chains: Anchor[][] = []
   let anchors: Anchor[] = []
-  for (const { i } of starts) {
-    const chain: Anchor[] = []; let expected = 1
-    for (const candidate of aligned.slice(i)) if (candidate.number === expected) { chain.push(candidate); expected++ }
+  for (const [index, candidate] of aligned.entries()) {
+    if (candidate.number < 1) continue
+    let previous: Anchor[] = []
+    for (let before = 0; before < index; before++) {
+      const chain = chains[before]
+      if (chain && aligned[before]!.number < candidate.number && chain.length > previous.length) previous = chain
+    }
+    const chain = [...previous, candidate]
+    chains[index] = chain
     if (chain.length > anchors.length) anchors = chain
   }
-  if (!anchors.length && aligned.length) {
-    const seen = new Set<number>()
-    anchors = aligned.filter(a => a.number > 0 && !seen.has(a.number) && !!seen.add(a.number))
+  if (anchors.length && anchors[0]!.number !== 1) {
     warnings.push('1번부터 이어지는 문항 번호를 확인하지 못했어요. 문항 번호와 누락을 확인해 주세요.')
   }
   if (anchors.length > 100) throw new Error('한 번에 최대 100문항까지 등록할 수 있어요.')
   const leftEdge = clamp((columns[0] ?? .1) - .006, .02, .2)
   const split = columns[1] ?? .51
-  const lines = pages.flatMap(page => ([0, 1] as const).flatMap(column => columnLines(page, column)))
   const markers: RangeMarker[] = []
   for (const line of lines) {
     const range = /^\s*\[\s*(\d{1,2})\s*[~～∼–-]\s*(\d{1,2})\s*\]/.exec(line.text)
@@ -222,6 +230,13 @@ export function analyzePdfText(pages: PdfTextPage[]): ExamPdfAnalysis {
   if (excluded.size) {
     metadata.excludedNumbers = excludedNumbers
     warnings.push(`영어 듣기 ${excludedNumbers[0]}~${excludedNumbers[excludedNumbers.length - 1]}번은 제외했어요. 독해 문항은 원래 번호를 유지합니다.`)
+  }
+  if (anchors.length) {
+    const found = new Set(anchors.map(anchor => anchor.number))
+    const first = anchors[0]!.number, last = anchors.at(-1)!.number
+    const missing = Array.from({ length: last - first + 1 }, (_, index) => first + index)
+      .filter(number => !found.has(number) && !excluded.has(number))
+    if (missing.length) warnings.push(`${missing.join('·')}번 문항 번호를 자동으로 찾지 못했어요. 뒤의 문항은 유지했으니 원본에서 누락된 문항을 확인하고 직접 추가해 주세요.`)
   }
   const passages: ImportPassageDraft[] = []
   const passageByNumber = new Map<number, ImportPassageDraft>()

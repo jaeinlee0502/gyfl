@@ -389,7 +389,7 @@ async function beginUpload() {
     dirty.value = true
     await renderAll(ticket)
     if (!current(ticket)) return
-    notice.value = '자동으로 찾은 시험 정보와 문항 영역을 확인해 주세요. 수정한 내용은 초안 저장으로 보관할 수 있어요.'
+    notice.value = questions.value.length ? '자동으로 찾은 시험 정보와 문항 영역을 확인해 주세요. 수정한 내용은 초안 저장으로 보관할 수 있어요.' : ''
     await loadRecords()
   } catch (cause) { if (current(ticket)) error.value = friendly(cause) }
   finally { if (current(ticket)) { busy.value = false; progress.value = '' } }
@@ -667,6 +667,7 @@ onBeforeUnmount(() => { alive = false; ++version; ++listVersion; clearPreviews()
         <p v-if="dirty" class="import-small">수정 중인 초안을 저장한 뒤 다른 파일을 선택할 수 있어요.</p>
       </section>
       <p v-if="progress" class="import-message" role="status">{{ progress }}</p><p v-if="error" class="import-message is-error" role="alert">{{ error }}</p><p v-if="notice" class="import-message is-success" role="status">{{ notice }}</p>
+      <p v-if="activeRecord && document && !busy && !questions.length" class="import-message is-error" role="alert">등록할 문항이 없어요. PDF에서 문항 번호를 읽지 못했거나 모든 문항이 제외되었을 수 있어요. 원본을 확인하고 아래의 ‘문항 직접 추가’를 이용하거나 초안을 저장해 주세요.</p>
       <section v-if="confirmClose" class="import-confirm" aria-labelledby="import-close-title"><h3 id="import-close-title">저장하지 않은 수정 내용이 있어요</h3><p>창을 닫으면 마지막으로 저장한 초안에서 다시 시작합니다.</p><div class="import-actions"><button class="import-secondary" @click="confirmClose = false">계속 검수하기</button><button class="import-danger" @click="closeNow">저장하지 않고 닫기</button></div></section>
       <section v-if="deleteTarget" class="import-confirm" aria-labelledby="import-delete-title"><h3 id="import-delete-title">{{ deleteTarget.status === 'published' ? '등록 완료된 자료를 삭제할까요?' : '이 미등록 초안을 삭제할까요?' }}</h3><p><strong>{{ deleteTarget.file_name }}</strong>의 원본 PDF와 초안을 삭제합니다.</p><p v-if="deleteTarget.status === 'published'">이 파일로 등록한 모든 문항·공통 지문·이미지와 사용자들의 해당 문항 저장 기록도 함께 삭제되며 되돌릴 수 없어요. 삭제 후 수정한 PDF를 다시 올려 등록할 수 있어요.</p><div class="import-actions"><button class="import-secondary" :disabled="busy" @click="deleteTarget = null">취소</button><button class="import-danger" :disabled="busy" @click="removeDraft">{{ deleteTarget.status === 'published' ? '등록 자료 삭제하기' : '초안 삭제하기' }}</button></div></section>
       <details class="import-draft-list" :open="!activeRecord">

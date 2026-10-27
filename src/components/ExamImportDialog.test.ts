@@ -171,6 +171,39 @@ describe('관리자 PDF 업로드와 검수', () => {
     wrapper.unmount()
   })
 
+  it('문항이 없는 영어 초안은 원본 PDF를 다시 분석해 독해를 표시하고 재업로드하지 않는다', async () => {
+    const saved = { ...record(), questions: [], metadata: {} }
+    const info = { ...metadata, subject: '영어' as const, month: 6 as const,
+      excludedNumbers: Array.from({ length: 17 }, (_, i) => i + 1) }
+    api.listImports.mockResolvedValueOnce([saved]); api.getImport.mockResolvedValueOnce(saved)
+    pdf.analyze.mockResolvedValueOnce({ metadata: info, pageCount: 1,
+      questions: Array.from({ length: 28 }, (_, i) => ({ ...question(), number: i + 18,
+        clientId: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}` })), warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await flushPromises()
+    await button(wrapper, '이어서 검수').trigger('click')
+    await flushPromises()
+    expect(pdf.analyze).toHaveBeenCalledOnce()
+    expect(api.createImport).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.import-question-card')).toHaveLength(28)
+    expect(wrapper.get('.import-excluded-note').text()).toContain('듣기 1~17번 제외 · 등록 대상 28문항')
+    await button(wrapper, '전체 검수 확인').trigger('click')
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('문항을 찾지 못한 PDF는 상단에서 안내하고 등록을 허용하지 않는다', async () => {
+    pdf.analyze.mockResolvedValueOnce({ metadata, pageCount: 1, questions: [], warnings: [] })
+    const wrapper = mount(ExamImportDialog)
+    await choosePdf(wrapper)
+    expect(wrapper.get('[role="alert"]').text()).toContain('등록할 문항이 없어요')
+    expect(wrapper.find('.import-message.is-success').exists()).toBe(false)
+    expect(wrapper.get('.import-publish-bar .import-primary').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '문항 직접 추가').attributes('disabled')).toBeUndefined()
+    expect(button(wrapper, '초안 저장').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('업로드 실패는 오류로 알리고 등록을 실행하지 않는다', async () => {
     api.createImport.mockRejectedValueOnce(new Error('PDF 업로드 연결 실패'))
     const wrapper = mount(ExamImportDialog)

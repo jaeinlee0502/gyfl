@@ -70,6 +70,48 @@ describe('과목별 PDF 구조 분석', () => {
     expect(analysis.warnings.some(warning => warning.includes('1~17번은 제외'))).toBe(true)
   })
 
+  it('듣기 15번의 번호와 마침표가 나뉘어 있어도 독해 18~45번과 공통 지문을 인식한다', () => {
+    const pages: PdfTextPage[] = Array.from({ length: 5 }, (_, index) => ({ page: index + 1,
+      runs: index === 0 ? [...header('영어'), run('1번부터 17번까지는 듣고 답하는 문제입니다.', .12, .14)] : [] }))
+    for (let number = 1; number <= 45; number++) {
+      const slot = number - 1, page = pages[Math.floor(slot / 10)]!
+      const left = slot % 10 < 5 ? .104 : .511, top = .22 + (slot % 5) * .13
+      if (number === 15) page.runs.push(run('15', left, top, left + .018), run('. 듣고 알맞은 말을 고르시오.', left + .018, top + .0019))
+      else page.runs.push(item(number, left, top))
+    }
+    pages[4]!.runs.push(run('[41~42] 다음 글을 읽고, 물음에 답하시오.', .104, .16))
+    const analysis = analyzePdfText(pages)
+    expect(analysis.questions.map(q => q.number)).toEqual(Array.from({ length: 28 }, (_, index) => index + 18))
+    expect(analysis.metadata.excludedNumbers).toEqual(Array.from({ length: 17 }, (_, index) => index + 1))
+    expect(analysis.passages).toHaveLength(1)
+    expect(analysis.questions.filter(q => q.passageClientId).map(q => q.number)).toEqual([41, 42])
+    expect(analysis.warnings.some(warning => warning.includes('누락된 문항'))).toBe(false)
+  })
+
+  it('중간 독해 번호를 읽지 못해도 뒤 문항은 유지하고 누락된 번호를 안내한다', () => {
+    const analysis = analyzePdfText([{ page: 1, runs: [...header('영어'),
+      item(18, .104, .2), item(19, .104, .4), item(21, .511, .2), item(22, .511, .5)] }])
+    expect(analysis.questions.map(q => q.number)).toEqual([18, 19, 21, 22])
+    expect(analysis.warnings).toContain('20번 문항 번호를 자동으로 찾지 못했어요. 뒤의 문항은 유지했으니 원본에서 누락된 문항을 확인하고 직접 추가해 주세요.')
+  })
+
+  it('듣기 번호 하나를 읽지 못해도 뒤의 독해를 버리지 않는다', () => {
+    const analysis = analyzePdfText([{ page: 1, runs: [...header('영어'),
+      run('1번부터 5번까지는 듣고 답하는 문제입니다.', .12, .14),
+      item(1, .104, .2), item(2, .104, .4), item(4, .511, .2), item(5, .511, .4), item(6, .511, .6)] }])
+    expect(analysis.questions.map(q => q.number)).toEqual([6])
+    expect(analysis.warnings.some(warning => warning.includes('누락된 문항'))).toBe(false)
+  })
+
+  it('문항 안에 반복된 번호나 소수·연도를 새 문항으로 오인하지 않는다', () => {
+    const analysis = analyzePdfText([{ page: 1, runs: [...header('영어'),
+      item(1, .104, .2), item(2, .104, .4), item(3, .511, .2),
+      item(1, .511, .3), item(2, .511, .4), run('17.8 percent', .511, .5),
+      run('2025. 안내문', .511, .6), item(4, .511, .7)] }])
+    expect(analysis.questions.map(q => q.number)).toEqual([1, 2, 3, 4])
+    expect(analysis.questions[2]!.regions[0]!.bottom).toBeCloseTo(.692)
+  })
+
   it('명시된 듣기 범위가 1~5이면 17번까지 임의로 제외하지 않는다', () => {
     const analysis = analyzePdfText([{ page: 1, runs: [...header('영어'), run('1번부터 5번까지는 듣고 답하는 문제입니다.', .12, .14), ...Array.from({ length: 6 }, (_, index) => item(index + 1, .104, .2 + index * .1))] }])
     expect(analysis.metadata.excludedNumbers).toEqual([1, 2, 3, 4, 5])
